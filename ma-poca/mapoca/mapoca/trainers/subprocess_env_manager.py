@@ -1,45 +1,35 @@
-from typing import Dict, NamedTuple, List, Any, Optional, Callable, Set
-import cloudpickle
 import enum
 import time
 
-from mlagents_envs.environment import UnityEnvironment
-from mlagents_envs.exception import (
-    UnityCommunicationException,
-    UnityTimeOutException,
-    UnityEnvironmentException,
-    UnityCommunicatorStoppedException,
-)
-from multiprocessing import Process, Pipe, Queue
+from collections.abc import Callable
+from multiprocessing import Pipe, Process, Queue
 from multiprocessing.connection import Connection
 from queue import Empty as EmptyQueueException
-from mlagents_envs.base_env import BaseEnv, BehaviorName, BehaviorSpec
-from mlagents_envs import logging_util
-from mapoca.trainers.env_manager import EnvManager, EnvironmentStep, AllStepResult
-from mapoca.trainers.settings import TrainerSettings
-from mlagents_envs.timers import (
-    TimerNode,
-    timed,
-    hierarchical_timer,
-    reset_timers,
-    get_timer_root,
-)
-from mapoca.trainers.settings import ParameterRandomizationSettings, RunOptions
-from mapoca.trainers.action_info import ActionInfo
-from mlagents_envs.side_channel.environment_parameters_channel import (
-    EnvironmentParametersChannel,
-)
-from mlagents_envs.side_channel.engine_configuration_channel import (
-    EngineConfigurationChannel,
-    EngineConfig,
-)
-from mlagents_envs.side_channel.stats_side_channel import (
-    EnvironmentStats,
-    StatsSideChannel,
-)
-from mapoca.training_analytics_side_channel import TrainingAnalyticsSideChannel
-from mlagents_envs.side_channel.side_channel import SideChannel
+from typing import TYPE_CHECKING, Any, NamedTuple, Optional
 
+import cloudpickle
+
+from mlagents_envs import logging_util
+from mlagents_envs.base_env import BaseEnv, BehaviorName, BehaviorSpec
+from mlagents_envs.exception import (
+    UnityCommunicationException,
+    UnityCommunicatorStoppedException,
+    UnityEnvironmentException,
+    UnityTimeOutException,
+)
+from mlagents_envs.side_channel.engine_configuration_channel import EngineConfig, EngineConfigurationChannel
+from mlagents_envs.side_channel.environment_parameters_channel import EnvironmentParametersChannel
+from mlagents_envs.side_channel.side_channel import SideChannel
+from mlagents_envs.side_channel.stats_side_channel import EnvironmentStats, StatsSideChannel
+from mlagents_envs.timers import TimerNode, get_timer_root, hierarchical_timer, reset_timers, timed
+
+from mapoca.trainers.action_info import ActionInfo
+from mapoca.trainers.env_manager import AllStepResult, EnvManager, EnvironmentStep
+from mapoca.trainers.settings import ParameterRandomizationSettings, RunOptions, TrainerSettings
+from mapoca.training_analytics_side_channel import TrainingAnalyticsSideChannel
+
+if TYPE_CHECKING:
+    from mlagents_envs.environment import UnityEnvironment
 
 logger = logging_util.get_logger(__name__)
 WORKER_SHUTDOWN_TIMEOUT_S = 10
@@ -79,7 +69,7 @@ class UnityEnvWorker:
         self.worker_id = worker_id
         self.conn = conn
         self.previous_step: EnvironmentStep = EnvironmentStep.empty(worker_id)
-        self.previous_all_action_info: Dict[str, ActionInfo] = {}
+        self.previous_all_action_info: dict[str, ActionInfo] = {}
         self.waiting = False
         self.closed = False
 
@@ -87,8 +77,8 @@ class UnityEnvWorker:
         try:
             req = EnvironmentRequest(cmd, payload)
             self.conn.send(req)
-        except (BrokenPipeError, EOFError):
-            raise UnityCommunicationException("UnityEnvironment worker: send failed.")
+        except (BrokenPipeError, EOFError) as err:
+            raise UnityCommunicationException("UnityEnvironment worker: send failed.") from err
 
     def recv(self) -> EnvironmentResponse:
         try:
@@ -96,21 +86,21 @@ class UnityEnvWorker:
             if response.cmd == EnvironmentCommand.ENV_EXITED:
                 env_exception: Exception = response.payload
                 raise env_exception
+        except (BrokenPipeError, EOFError) as err:
+            raise UnityCommunicationException("UnityEnvironment worker: recv failed.") from err
+        else:
             return response
-        except (BrokenPipeError, EOFError):
-            raise UnityCommunicationException("UnityEnvironment worker: recv failed.")
 
     def request_close(self):
         try:
             self.conn.send(EnvironmentRequest(EnvironmentCommand.CLOSE))
         except (BrokenPipeError, EOFError):
             logger.debug(
-                f"UnityEnvWorker {self.worker_id} got exception trying to close."
+                f"UnityEnvWorker {self.worker_id} got exception trying to close.",
             )
-            pass
 
 
-def worker(
+def worker(  # noqa: PLR0915
     parent_conn: Connection,
     step_queue: Queue,
     pickled_env_factory: str,
@@ -119,7 +109,8 @@ def worker(
     log_level: int = logging_util.INFO,
 ) -> None:
     env_factory: Callable[
-        [int, List[SideChannel]], UnityEnvironment
+        [int, list[SideChannel]],
+        UnityEnvironment,
     ] = cloudpickle.loads(pickled_env_factory)
     env_parameters = EnvironmentParametersChannel()
 
@@ -158,10 +149,7 @@ def worker(
             side_channels.append(training_analytics_channel)
 
         env = env_factory(worker_id, side_channels)
-        if (
-            not env.academy_capabilities
-            or not env.academy_capabilities.trainingAnalytics
-        ):
+        if not env.academy_capabilities or not env.academy_capabilities.trainingAnalytics:
             # Make sure we don't try to send training analytics if the environment doesn't know how to process
             # them. This wouldn't be catastrophic, but would result in unknown SideChannel UUIDs being used.
             training_analytics_channel = None
@@ -181,15 +169,19 @@ def worker(
                 # So after we send back the root timer, we can safely clear them.
                 # Note that we could randomly return timers a fraction of the time if we wanted to reduce
                 # the data transferred.
-                # TODO get gauges from the workers and merge them in the main process too.
+                # TODO: get gauges from the workers and merge them in the main process too.
                 env_stats = stats_channel.get_and_reset_stats()
                 step_response = StepResponse(
-                    all_step_result, get_timer_root(), env_stats
+                    all_step_result,
+                    get_timer_root(),
+                    env_stats,
                 )
                 step_queue.put(
                     EnvironmentResponse(
-                        EnvironmentCommand.STEP, worker_id, step_response
-                    )
+                        EnvironmentCommand.STEP,
+                        worker_id,
+                        step_response,
+                    ),
                 )
                 reset_timers()
             elif req.cmd == EnvironmentCommand.BEHAVIOR_SPECS:
@@ -202,7 +194,8 @@ def worker(
                 behavior_name, trainer_config = req.payload
                 if training_analytics_channel:
                     training_analytics_channel.training_started(
-                        behavior_name, trainer_config
+                        behavior_name,
+                        trainer_config,
                     )
             elif req.cmd == EnvironmentCommand.RESET:
                 env.reset()
@@ -219,15 +212,15 @@ def worker(
     ) as ex:
         logger.debug(f"UnityEnvironment worker {worker_id}: environment stopping.")
         step_queue.put(
-            EnvironmentResponse(EnvironmentCommand.ENV_EXITED, worker_id, ex)
+            EnvironmentResponse(EnvironmentCommand.ENV_EXITED, worker_id, ex),
         )
         _send_response(EnvironmentCommand.ENV_EXITED, ex)
     except Exception as ex:
         logger.exception(
-            f"UnityEnvironment worker {worker_id}: environment raised an unexpected exception."
+            f"UnityEnvironment worker {worker_id}: environment raised an unexpected exception.",
         )
         step_queue.put(
-            EnvironmentResponse(EnvironmentCommand.ENV_EXITED, worker_id, ex)
+            EnvironmentResponse(EnvironmentCommand.ENV_EXITED, worker_id, ex),
         )
         _send_response(EnvironmentCommand.ENV_EXITED, ex)
     finally:
@@ -243,19 +236,22 @@ def worker(
 class SubprocessEnvManager(EnvManager):
     def __init__(
         self,
-        env_factory: Callable[[int, List[SideChannel]], BaseEnv],
+        env_factory: Callable[[int, list[SideChannel]], BaseEnv],
         run_options: RunOptions,
         n_env: int = 1,
     ):
         super().__init__()
-        self.env_workers: List[UnityEnvWorker] = []
+        self.env_workers: list[UnityEnvWorker] = []
         self.step_queue: Queue = Queue()
         self.workers_alive = 0
         for worker_idx in range(n_env):
             self.env_workers.append(
                 self.create_worker(
-                    worker_idx, self.step_queue, env_factory, run_options
-                )
+                    worker_idx,
+                    self.step_queue,
+                    env_factory,
+                    run_options,
+                ),
             )
             self.workers_alive += 1
 
@@ -263,7 +259,7 @@ class SubprocessEnvManager(EnvManager):
     def create_worker(
         worker_id: int,
         step_queue: Queue,
-        env_factory: Callable[[int, List[SideChannel]], BaseEnv],
+        env_factory: Callable[[int, list[SideChannel]], BaseEnv],
         run_options: RunOptions,
     ) -> UnityEnvWorker:
         parent_conn, child_conn = Pipe()
@@ -293,12 +289,12 @@ class SubprocessEnvManager(EnvManager):
                 env_worker.send(EnvironmentCommand.STEP, env_action_info)
                 env_worker.waiting = True
 
-    def _step(self) -> List[EnvironmentStep]:
+    def _step(self) -> list[EnvironmentStep]:
         # Queue steps for any workers which aren't in the "waiting" state.
         self._queue_steps()
 
-        worker_steps: List[EnvironmentResponse] = []
-        step_workers: Set[int] = set()
+        worker_steps: list[EnvironmentResponse] = []
+        step_workers: set[int] = set()
         # Poll the step queue for completed steps from environment workers until we retrieve
         # 1 or more, which we will then return as StepInfos
         while len(worker_steps) < 1:
@@ -312,13 +308,12 @@ class SubprocessEnvManager(EnvManager):
                     if step.worker_id not in step_workers:
                         worker_steps.append(step)
                         step_workers.add(step.worker_id)
-            except EmptyQueueException:
+            except EmptyQueueException:  # noqa: PERF203
                 pass
 
-        step_infos = self._postprocess_steps(worker_steps)
-        return step_infos
+        return self._postprocess_steps(worker_steps)
 
-    def _reset_env(self, config: Optional[Dict] = None) -> List[EnvironmentStep]:
+    def _reset_env(self, config: Optional[dict] = None) -> list[EnvironmentStep]:
         while any(ew.waiting for ew in self.env_workers):
             if not self.step_queue.empty():
                 step = self.step_queue.get_nowait()
@@ -331,19 +326,21 @@ class SubprocessEnvManager(EnvManager):
         # Next (synchronously) collect the reset observations from each worker in sequence
         for ew in self.env_workers:
             ew.previous_step = EnvironmentStep(ew.recv().payload, ew.worker_id, {}, {})
-        return list(map(lambda ew: ew.previous_step, self.env_workers))
+        return [ew.previous_step for ew in self.env_workers]
 
-    def set_env_parameters(self, config: Dict = None) -> None:
+    def set_env_parameters(self, config: dict | None = None) -> None:
         """
         Sends environment parameter settings to C# via the
         EnvironmentParametersSidehannel for each worker.
-        :param config: Dict of environment parameter keys and values
+        :param config: Dict of environment parameter keys and values.
         """
         for ew in self.env_workers:
             ew.send(EnvironmentCommand.ENVIRONMENT_PARAMETERS, config)
 
     def on_training_started(
-        self, behavior_name: str, trainer_settings: TrainerSettings
+        self,
+        behavior_name: str,
+        trainer_settings: TrainerSettings,
     ) -> None:
         """
         Handle traing starting for a new behavior type. Generally nothing is necessary here.
@@ -353,12 +350,13 @@ class SubprocessEnvManager(EnvManager):
         """
         for ew in self.env_workers:
             ew.send(
-                EnvironmentCommand.TRAINING_STARTED, (behavior_name, trainer_settings)
+                EnvironmentCommand.TRAINING_STARTED,
+                (behavior_name, trainer_settings),
             )
 
     @property
-    def training_behaviors(self) -> Dict[BehaviorName, BehaviorSpec]:
-        result: Dict[BehaviorName, BehaviorSpec] = {}
+    def training_behaviors(self) -> dict[BehaviorName, BehaviorSpec]:
+        result: dict[BehaviorName, BehaviorSpec] = {}
         for worker in self.env_workers:
             worker.send(EnvironmentCommand.BEHAVIOR_SPECS)
             result.update(worker.recv().payload)
@@ -378,7 +376,7 @@ class SubprocessEnvManager(EnvManager):
                     env_worker.closed = True
                     self.workers_alive -= 1
                 # Discard all other messages.
-            except EmptyQueueException:
+            except EmptyQueueException:  # noqa: PERF203
                 pass
         self.step_queue.close()
         # Sanity check to kill zombie workers and report an issue if they occur.
@@ -388,13 +386,14 @@ class SubprocessEnvManager(EnvManager):
                 if not env_worker.closed and env_worker.process.is_alive():
                     env_worker.process.terminate()
                     logger.error(
-                        "A SubprocessEnvManager worker did not shut down correctly so it was forcefully terminated."
+                        "A SubprocessEnvManager worker did not shut down correctly so it was forcefully terminated.",
                     )
         self.step_queue.join_thread()
 
     def _postprocess_steps(
-        self, env_steps: List[EnvironmentResponse]
-    ) -> List[EnvironmentStep]:
+        self,
+        env_steps: list[EnvironmentResponse],
+    ) -> list[EnvironmentStep]:
         step_infos = []
         timer_nodes = []
         for step in env_steps:
@@ -416,17 +415,20 @@ class SubprocessEnvManager(EnvManager):
             with hierarchical_timer("workers") as main_timer_node:
                 for worker_timer_node in timer_nodes:
                     main_timer_node.merge(
-                        worker_timer_node, root_name="worker_root", is_parallel=True
+                        worker_timer_node,
+                        root_name="worker_root",
+                        is_parallel=True,
                     )
 
         return step_infos
 
     @timed
-    def _take_step(self, last_step: EnvironmentStep) -> Dict[BehaviorName, ActionInfo]:
-        all_action_info: Dict[str, ActionInfo] = {}
+    def _take_step(self, last_step: EnvironmentStep) -> dict[BehaviorName, ActionInfo]:
+        all_action_info: dict[str, ActionInfo] = {}
         for brain_name, step_tuple in last_step.current_all_step_result.items():
             if brain_name in self.policies:
                 all_action_info[brain_name] = self.policies[brain_name].get_action(
-                    step_tuple[0], last_step.worker_id
+                    step_tuple[0],
+                    last_step.worker_id,
                 )
         return all_action_info

@@ -1,15 +1,15 @@
-from typing import Dict, cast
-from mapoca.torch_utils import torch, default_device
-
-from mapoca.trainers.buffer import AgentBuffer, BufferKey, RewardSignalUtil
+from typing import cast
 
 from mlagents_envs.timers import timed
-from mapoca.trainers.policy.torch_policy import TorchPolicy
+
+from mapoca.torch_utils import default_device, torch
+from mapoca.trainers.buffer import AgentBuffer, BufferKey, RewardSignalUtil
 from mapoca.trainers.optimizer.torch_optimizer import TorchOptimizer
-from mapoca.trainers.settings import TrainerSettings, PPOSettings
-from mapoca.trainers.torch.networks import ValueNetwork
-from mapoca.trainers.torch.agent_action import AgentAction
+from mapoca.trainers.policy.torch_policy import TorchPolicy
+from mapoca.trainers.settings import PPOSettings, TrainerSettings
 from mapoca.trainers.torch.action_log_probs import ActionLogProbs
+from mapoca.trainers.torch.agent_action import AgentAction
+from mapoca.trainers.torch.networks import ValueNetwork
 from mapoca.trainers.torch.utils import ModelUtils
 from mapoca.trainers.trajectory import ObsUtil
 
@@ -41,7 +41,7 @@ class TorchPPOOptimizer(TorchOptimizer):
 
         params = list(self.policy.actor.parameters()) + list(self._critic.parameters())
         self.hyperparameters: PPOSettings = cast(
-            PPOSettings, trainer_settings.hyperparameters
+            "PPOSettings", trainer_settings.hyperparameters,
         )
         self.decay_learning_rate = ModelUtils.DecayedValue(
             self.hyperparameters.learning_rate_schedule,
@@ -63,7 +63,7 @@ class TorchPPOOptimizer(TorchOptimizer):
         )
 
         self.optimizer = torch.optim.Adam(
-            params, lr=self.trainer_settings.hyperparameters.learning_rate
+            params, lr=self.trainer_settings.hyperparameters.learning_rate,
         )
         self.stats_name_to_update_name = {
             "Losses/Value Loss": "value_loss",
@@ -77,7 +77,7 @@ class TorchPPOOptimizer(TorchOptimizer):
         return self._critic
 
     @timed
-    def update(self, batch: AgentBuffer, num_sequences: int) -> Dict[str, float]:
+    def update(self, batch: AgentBuffer, num_sequences: int) -> dict[str, float]:
         """
         Performs update on model.
         :param batch: Batch of experiences.
@@ -92,10 +92,10 @@ class TorchPPOOptimizer(TorchOptimizer):
         old_values = {}
         for name in self.reward_signals:
             old_values[name] = ModelUtils.list_to_tensor(
-                batch[RewardSignalUtil.value_estimates_key(name)]
+                batch[RewardSignalUtil.value_estimates_key(name)],
             )
             returns[name] = ModelUtils.list_to_tensor(
-                batch[RewardSignalUtil.returns_key(name)]
+                batch[RewardSignalUtil.returns_key(name)],
             )
 
         n_obs = len(self.policy.behavior_spec.observation_specs)
@@ -117,7 +117,7 @@ class TorchPPOOptimizer(TorchOptimizer):
         value_memories = [
             ModelUtils.list_to_tensor(batch[BufferKey.CRITIC_MEMORY][i])
             for i in range(
-                0, len(batch[BufferKey.CRITIC_MEMORY]), self.policy.sequence_length
+                0, len(batch[BufferKey.CRITIC_MEMORY]), self.policy.sequence_length,
             )
         ]
         if len(value_memories) > 0:
@@ -139,7 +139,7 @@ class TorchPPOOptimizer(TorchOptimizer):
         log_probs = log_probs.flatten()
         loss_masks = ModelUtils.list_to_tensor(batch[BufferKey.MASKS], dtype=torch.bool)
         value_loss = ModelUtils.trust_region_value_loss(
-            values, old_values, returns, decay_eps, loss_masks
+            values, old_values, returns, decay_eps, loss_masks,
         )
         policy_loss = ModelUtils.trust_region_policy_loss(
             ModelUtils.list_to_tensor(batch[BufferKey.ADVANTAGES]),

@@ -3,21 +3,22 @@
 # Contains an implementation of MA-POCA.
 
 from collections import defaultdict
-from typing import cast, Dict
+from typing import cast
 
 import numpy as np
 
-from mlagents_envs.side_channel.stats_side_channel import StatsAggregationMethod
-from mlagents_envs.logging_util import get_logger
 from mlagents_envs.base_env import BehaviorSpec
+from mlagents_envs.logging_util import get_logger
+from mlagents_envs.side_channel.stats_side_channel import StatsAggregationMethod
+
+from mapoca.trainers.behavior_id_utils import BehaviorIdentifiers
 from mapoca.trainers.buffer import BufferKey, RewardSignalUtil
-from mapoca.trainers.trainer.rl_trainer import RLTrainer
+from mapoca.trainers.poca.optimizer_torch import TorchETPOCAOptimizer, TorchPOCAOptimizer
 from mapoca.trainers.policy import Policy
 from mapoca.trainers.policy.torch_policy import TorchPolicy
-from mapoca.trainers.poca.optimizer_torch import TorchPOCAOptimizer
+from mapoca.trainers.settings import POCASettings, TrainerSettings
+from mapoca.trainers.trainer.rl_trainer import RLTrainer
 from mapoca.trainers.trajectory import Trajectory
-from mapoca.trainers.behavior_id_utils import BehaviorIdentifiers
-from mapoca.trainers.settings import TrainerSettings, POCASettings
 
 logger = get_logger(__name__)
 
@@ -54,11 +55,12 @@ class POCATrainer(RLTrainer):
             reward_buff_cap,
         )
         self.hyperparameters: POCASettings = cast(
-            POCASettings, self.trainer_settings.hyperparameters
+            "POCASettings",
+            self.trainer_settings.hyperparameters,
         )
         self.seed = seed
-        self.policy: TorchPolicy = None  # type: ignore
-        self.collected_group_rewards: Dict[str, int] = defaultdict(lambda: 0)
+        self.policy: TorchPolicy | None = None
+        self.collected_group_rewards: dict[str, int] = defaultdict(lambda: 0)
 
     def _process_trajectory(self, trajectory: Trajectory) -> None:
         """
@@ -85,9 +87,7 @@ class POCATrainer(RLTrainer):
             agent_buffer_trajectory,
             trajectory.next_obs,
             trajectory.next_group_obs,
-            trajectory.all_group_dones_reached
-            and trajectory.done_reached
-            and not trajectory.interrupted,
+            trajectory.all_group_dones_reached and trajectory.done_reached and not trajectory.interrupted,
         )
 
         if value_memories is not None and baseline_memories is not None:
@@ -95,33 +95,27 @@ class POCATrainer(RLTrainer):
             agent_buffer_trajectory[BufferKey.BASELINE_MEMORY].set(baseline_memories)
 
         for name, v in value_estimates.items():
-            agent_buffer_trajectory[RewardSignalUtil.value_estimates_key(name)].extend(
-                v
-            )
-            agent_buffer_trajectory[
-                RewardSignalUtil.baseline_estimates_key(name)
-            ].extend(baseline_estimates[name])
+            agent_buffer_trajectory[RewardSignalUtil.value_estimates_key(name)].extend(v)
+            agent_buffer_trajectory[RewardSignalUtil.baseline_estimates_key(name)].extend(baseline_estimates[name])
             self._stats_reporter.add_stat(
                 f"Policy/{self.optimizer.reward_signals[name].name.capitalize()} Baseline Estimate",
                 np.mean(baseline_estimates[name]),
             )
             self._stats_reporter.add_stat(
                 f"Policy/{self.optimizer.reward_signals[name].name.capitalize()} Value Estimate",
-                np.mean(value_estimates[name]),
+                np.mean(v),
             )
 
         self.collected_rewards["environment"][agent_id] += np.sum(
-            agent_buffer_trajectory[BufferKey.ENVIRONMENT_REWARDS]
+            agent_buffer_trajectory[BufferKey.ENVIRONMENT_REWARDS],
         )
         self.collected_group_rewards[agent_id] += np.sum(
-            agent_buffer_trajectory[BufferKey.GROUP_REWARD]
+            agent_buffer_trajectory[BufferKey.GROUP_REWARD],
         )
         for name, reward_signal in self.optimizer.reward_signals.items():
-            evaluate_result = (
-                reward_signal.evaluate(agent_buffer_trajectory) * reward_signal.strength
-            )
+            evaluate_result = reward_signal.evaluate(agent_buffer_trajectory) * reward_signal.strength
             agent_buffer_trajectory[RewardSignalUtil.rewards_key(name)].extend(
-                evaluate_result
+                evaluate_result,
             )
             # Report the reward signals
             self.collected_rewards[name][agent_id] += np.sum(evaluate_result)
@@ -129,18 +123,13 @@ class POCATrainer(RLTrainer):
         # Compute lambda returns and advantage
         tmp_advantages = []
         for name in self.optimizer.reward_signals:
-
             local_rewards = np.array(
                 agent_buffer_trajectory[RewardSignalUtil.rewards_key(name)].get_batch(),
                 dtype=np.float32,
             )
 
-            baseline_estimate = agent_buffer_trajectory[
-                RewardSignalUtil.baseline_estimates_key(name)
-            ].get_batch()
-            v_estimates = agent_buffer_trajectory[
-                RewardSignalUtil.value_estimates_key(name)
-            ].get_batch()
+            baseline_estimate = agent_buffer_trajectory[RewardSignalUtil.baseline_estimates_key(name)].get_batch()
+            v_estimates = agent_buffer_trajectory[RewardSignalUtil.value_estimates_key(name)].get_batch()
 
             lambd_returns = lambda_return(
                 r=local_rewards,
@@ -153,16 +142,16 @@ class POCATrainer(RLTrainer):
             local_advantage = np.array(lambd_returns) - np.array(baseline_estimate)
 
             agent_buffer_trajectory[RewardSignalUtil.returns_key(name)].set(
-                lambd_returns
+                lambd_returns,
             )
             agent_buffer_trajectory[RewardSignalUtil.advantage_key(name)].set(
-                local_advantage
+                local_advantage,
             )
             tmp_advantages.append(local_advantage)
 
         # Get global advantages
         global_advantages = list(
-            np.mean(np.array(tmp_advantages, dtype=np.float32), axis=0)
+            np.mean(np.array(tmp_advantages, dtype=np.float32), axis=0),
         )
         agent_buffer_trajectory[BufferKey.ADVANTAGES].set(global_advantages)
 
@@ -187,7 +176,7 @@ class POCATrainer(RLTrainer):
     def _is_ready_update(self):
         """
         Returns whether or not the trainer has enough elements to run update model
-        :return: A boolean corresponding to whether or not update_model() can be run
+        :return: A boolean corresponding to whether or not update_model() can be run.
         """
         size_of_buffer = self.update_buffer.num_experiences
         return size_of_buffer > self.hyperparameters.buffer_size
@@ -202,22 +191,21 @@ class POCATrainer(RLTrainer):
 
         # Make sure batch_size is a multiple of sequence length. During training, we
         # will need to reshape the data into a batch_size x sequence_length tensor.
-        batch_size = (
-            self.hyperparameters.batch_size
-            - self.hyperparameters.batch_size % self.policy.sequence_length
-        )
+        batch_size = self.hyperparameters.batch_size - self.hyperparameters.batch_size % self.policy.sequence_length
         # Make sure there is at least one sequence
         batch_size = max(batch_size, self.policy.sequence_length)
 
         n_sequences = max(
-            int(self.hyperparameters.batch_size / self.policy.sequence_length), 1
+            int(self.hyperparameters.batch_size / self.policy.sequence_length),
+            1,
         )
 
         advantages = np.array(
-            self.update_buffer[BufferKey.ADVANTAGES].get_batch(), dtype=np.float32
+            self.update_buffer[BufferKey.ADVANTAGES].get_batch(),
+            dtype=np.float32,
         )
         self.update_buffer[BufferKey.ADVANTAGES].set(
-            (advantages - advantages.mean()) / (advantages.std() + 1e-10)
+            (advantages - advantages.mean()) / (advantages.std() + 1e-10),
         )
         num_epoch = self.hyperparameters.num_epoch
         batch_update_stats = defaultdict(list)
@@ -227,7 +215,8 @@ class POCATrainer(RLTrainer):
             max_num_batch = buffer_length // batch_size
             for i in range(0, max_num_batch * batch_size, batch_size):
                 update_stats = self.optimizer.update(
-                    buffer.make_mini_batch(i, i + batch_size), n_sequences
+                    buffer.make_mini_batch(i, i + batch_size),
+                    n_sequences,
                 )
                 for stat_name, value in update_stats.items():
                     batch_update_stats[stat_name].append(value)
@@ -252,28 +241,31 @@ class POCATrainer(RLTrainer):
         self.collected_group_rewards.clear()
 
     def create_torch_policy(
-        self, parsed_behavior_id: BehaviorIdentifiers, behavior_spec: BehaviorSpec
+        self,
+        parsed_behavior_id: BehaviorIdentifiers,
+        behavior_spec: BehaviorSpec,
     ) -> TorchPolicy:
         """
         Creates a policy with a PyTorch backend and POCA hyperparameters
         :param parsed_behavior_id:
         :param behavior_spec: specifications for policy construction
-        :return policy
+        :return policy.
         """
-        policy = TorchPolicy(
+        return TorchPolicy(
             self.seed,
             behavior_spec,
             self.trainer_settings,
             condition_sigma_on_obs=False,  # Faster training for POCA
             separate_critic=True,  # Match network architecture with TF
         )
-        return policy
 
     def create_poca_optimizer(self) -> TorchPOCAOptimizer:
         return TorchPOCAOptimizer(self.policy, self.trainer_settings)
 
     def add_policy(
-        self, parsed_behavior_id: BehaviorIdentifiers, policy: Policy
+        self,
+        parsed_behavior_id: BehaviorIdentifiers,
+        policy: Policy,
     ) -> None:
         """
         Adds policy to trainer.
@@ -281,11 +273,11 @@ class POCATrainer(RLTrainer):
         :param policy: Policy to associate with name_behavior_id.
         """
         if not isinstance(policy, TorchPolicy):
-            raise RuntimeError(f"policy {policy} must be an instance of TorchPolicy.")
+            raise TypeError(f"policy {policy} must be an instance of TorchPolicy.")
         self.policy = policy
         self.policies[parsed_behavior_id.behavior_id] = policy
         self.optimizer = self.create_poca_optimizer()
-        for _reward_signal in self.optimizer.reward_signals.keys():
+        for _reward_signal in self.optimizer.reward_signals:
             self.collected_rewards[_reward_signal] = defaultdict(lambda: 0)
 
         self.model_saver.register(self.policy)
@@ -298,19 +290,79 @@ class POCATrainer(RLTrainer):
     def get_policy(self, name_behavior_id: str) -> Policy:
         """
         Gets policy from trainer associated with name_behavior_id
-        :param name_behavior_id: full identifier of policy
+        :param name_behavior_id: full identifier of policy.
         """
-
         return self.policy
+
+
+class ETPOCATrainer(POCATrainer):
+    """The POCATrainer is an implementation of the MA-POCA algorithm."""
+
+    def _update_policy(self):
+        """
+        Uses demonstration_buffer to update the policy.
+        The reward signal generators must be updated in this method at their own pace.
+        """
+        buffer_length = self.update_buffer.num_experiences
+        self.cumulative_returns_since_policy_update.clear()
+
+        # Make sure batch_size is a multiple of sequence length. During training, we
+        # will need to reshape the data into a batch_size x sequence_length tensor.
+        batch_size = self.hyperparameters.batch_size - self.hyperparameters.batch_size % self.policy.sequence_length
+        # Make sure there is at least one sequence
+        batch_size = max(batch_size, self.policy.sequence_length)
+
+        n_sequences = max(
+            int(self.hyperparameters.batch_size / self.policy.sequence_length),
+            1,
+        )
+
+        advantages = np.array(
+            self.update_buffer[BufferKey.ADVANTAGES].get_batch(),
+            dtype=np.float32,
+        )
+        self.update_buffer[BufferKey.ADVANTAGES].set(
+            (advantages - advantages.mean()) / (advantages.std() + 1e-10),
+        )
+        num_epoch = self.hyperparameters.num_epoch
+        batch_update_stats = defaultdict(list)
+        # copy the original buffer so we can update the eligibility trace predictions for each minibatch
+        original_buffer = self.update_buffer.make_mini_batch(0, buffer_length)
+
+        # # add the first estimates of the trace to the buffer
+        self.optimizer.init_buffer_traces(original_buffer, n_sequences, lambd=self.hyperparameters.lambd)
+
+        for _ in range(num_epoch):
+            self.update_buffer.shuffle(sequence_length=self.policy.sequence_length)
+            buffer = self.update_buffer
+            max_num_batch = buffer_length // batch_size
+            for i in range(0, max_num_batch * batch_size, batch_size):
+                update_stats = self.optimizer.update(
+                    buffer.make_mini_batch(i, i + batch_size),
+                    n_sequences,
+                    original_buffer=original_buffer,
+                    lambd=self.hyperparameters.lambd,
+                )
+                for stat_name, value in update_stats.items():
+                    batch_update_stats[stat_name].append(value)
+
+        for stat, stat_list in batch_update_stats.items():
+            self._stats_reporter.add_stat(stat, np.mean(stat_list))
+
+        if self.optimizer.bc_module:
+            update_stats = self.optimizer.bc_module.update()
+            for stat, val in update_stats.items():
+                self._stats_reporter.add_stat(stat, val)
+        self._clear_update_buffer()
+        return True
+
+    def create_poca_optimizer(self) -> TorchPOCAOptimizer:
+        return TorchETPOCAOptimizer(self.policy, self.trainer_settings)
 
 
 def lambda_return(r, value_estimates, gamma=0.99, lambd=0.8, value_next=0.0):
     returns = np.zeros_like(r)
     returns[-1] = r[-1] + gamma * value_next
-    for t in reversed(range(0, r.size - 1)):
-        returns[t] = (
-            gamma * lambd * returns[t + 1]
-            + r[t]
-            + (1 - lambd) * gamma * value_estimates[t + 1]
-        )
+    for t in reversed(range(r.size - 1)):
+        returns[t] = gamma * lambd * returns[t + 1] + r[t] + (1 - lambd) * gamma * value_estimates[t + 1]
     return returns

@@ -2,34 +2,37 @@
 # configuration file and the new format. It will be marked for deprecation once the
 # Python CLI and configuration files are finalized, and removed the following release.
 
+import argparse
+
+from pathlib import Path
+from typing import Any, Optional
+
 import attr
 import cattr
 import yaml
-from typing import Dict, Any, Optional
-import argparse
-from mapoca.trainers.settings import TrainerSettings, NetworkSettings, TrainerType
+
 from mapoca.trainers.cli_utils import load_config
 from mapoca.trainers.exception import TrainerConfigError
+from mapoca.trainers.settings import NetworkSettings, TrainerSettings, TrainerType
 
 
 # Take an existing trainer config (e.g. trainer_config.yaml) and turn it into the new format.
-def convert_behaviors(old_trainer_config: Dict[str, Any]) -> Dict[str, Any]:
+def convert_behaviors(old_trainer_config: dict[str, Any]) -> dict[str, Any]:
     all_behavior_config_dict = {}
     default_config = old_trainer_config.get("default", {})
     for behavior_name, config in old_trainer_config.items():
         if behavior_name != "default":
-            config = default_config.copy()
+            config = default_config.copy()  # noqa: PLW2901
             config.update(old_trainer_config[behavior_name])
 
             # Convert to split TrainerSettings, Hyperparameters, NetworkSettings
             # Set trainer_type and get appropriate hyperparameter settings
             try:
                 trainer_type = config["trainer"]
-            except KeyError:
+            except KeyError as err:
                 raise TrainerConfigError(
-                    "Config doesn't specify a trainer type. "
-                    "Please specify trainer: in your config."
-                )
+                    "Config doesn't specify a trainer type. Please specify trainer: in your config.",
+                ) from err
             new_config = {}
             new_config["trainer_type"] = trainer_type
             hyperparam_cls = TrainerType(trainer_type).to_settings()
@@ -41,38 +44,34 @@ def convert_behaviors(old_trainer_config: Dict[str, Any]) -> Dict[str, Any]:
             # Deal with recurrent
             try:
                 if config["use_recurrent"]:
-                    new_config[
-                        "network_settings"
-                    ].memory = NetworkSettings.MemorySettings(
+                    new_config["network_settings"].memory = NetworkSettings.MemorySettings(
                         sequence_length=config["sequence_length"],
                         memory_size=config["memory_size"],
                     )
-            except KeyError:
+            except KeyError as err:
                 raise TrainerConfigError(
-                    "Config doesn't specify use_recurrent. "
-                    "Please specify true or false for use_recurrent in your config."
-                )
+                    "Config doesn't specify use_recurrent. Please specify true or false for use_recurrent in your config.",
+                ) from err
             # Absorb the rest into the base TrainerSettings
-            for key, val in config.items():
-                if key in attr.fields_dict(TrainerSettings):
-                    new_config[key] = val
+            new_config |= {key: val for key, val in config.items() if key in attr.fields_dict(TrainerSettings)}
 
             # Structure the whole thing
             all_behavior_config_dict[behavior_name] = cattr.structure(
-                new_config, TrainerSettings
+                new_config,
+                TrainerSettings,
             )
     return all_behavior_config_dict
 
 
-def write_to_yaml_file(unstructed_config: Dict[str, Any], output_config: str) -> None:
-    with open(output_config, "w") as f:
+def write_to_yaml_file(unstructed_config: dict[str, Any], output_config: str) -> None:
+    with Path(output_config).open("w", encoding="utf-8") as f:
         try:
             yaml.dump(unstructed_config, f, sort_keys=False)
         except TypeError:  # Older versions of pyyaml don't support sort_keys
             yaml.dump(unstructed_config, f)
 
 
-def remove_nones(config: Dict[Any, Any]) -> Dict[str, Any]:
+def remove_nones(config: dict[Any, Any]) -> dict[str, Any]:
     new_config = {}
     for key, val in config.items():
         if isinstance(val, dict):
@@ -83,12 +82,12 @@ def remove_nones(config: Dict[Any, Any]) -> Dict[str, Any]:
 
 
 # Take a sampler from the old format and convert to new sampler structure
-def convert_samplers(old_sampler_config: Dict[str, Any]) -> Dict[str, Any]:
-    new_sampler_config: Dict[str, Any] = {}
+def convert_samplers(old_sampler_config: dict[str, Any]) -> dict[str, Any]:
+    new_sampler_config: dict[str, Any] = {}
     for parameter, parameter_config in old_sampler_config.items():
         if parameter == "resampling-interval":
             print(
-                "resampling-interval is no longer necessary for parameter randomization and is being ignored."
+                "resampling-interval is no longer necessary for parameter randomization and is being ignored.",
             )
             continue
         new_sampler_config[parameter] = {}
@@ -100,8 +99,9 @@ def convert_samplers(old_sampler_config: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def convert_samplers_and_curriculum(
-    parameter_dict: Dict[str, Any], curriculum: Dict[str, Any]
-) -> Dict[str, Any]:
+    parameter_dict: dict[str, Any],
+    curriculum: dict[str, Any],
+) -> dict[str, Any]:
     for key, sampler in parameter_dict.items():
         if "sampler_parameters" not in sampler:
             parameter_dict[key]["sampler_parameters"] = {}
@@ -115,7 +115,7 @@ def convert_samplers_and_curriculum(
         ]:
             if argument in sampler:
                 parameter_dict[key]["sampler_parameters"][argument] = sampler[argument]
-                parameter_dict[key].pop(argument)
+                sampler.pop(argument)
     param_set = set(parameter_dict.keys())
     for behavior_name, behavior_dict in curriculum.items():
         measure = behavior_dict["measure"]
@@ -124,10 +124,10 @@ def convert_samplers_and_curriculum(
         thresholds = behavior_dict["thresholds"]
         num_lessons = len(thresholds) + 1
         parameters = behavior_dict["parameters"]
-        for param_name in parameters.keys():
+        for param_name in parameters:
             if param_name in param_set:
                 print(
-                    f"The parameter {param_name} has both a sampler and a curriculum. Will ignore curriculum"
+                    f"The parameter {param_name} has both a sampler and a curriculum. Will ignore curriculum",
                 )
             else:
                 param_set.add(param_name)
@@ -144,23 +144,23 @@ def convert_samplers_and_curriculum(
                                     "threshold": thresholds[lesson_index],
                                 },
                                 "value": parameters[param_name][lesson_index],
-                            }
-                        }
+                            },
+                        },
                     )
                 lesson_index += 1  # This is the last lesson
                 parameter_dict[param_name]["curriculum"].append(
                     {
                         f"Lesson{lesson_index}": {
-                            "value": parameters[param_name][lesson_index]
-                        }
-                    }
+                            "value": parameters[param_name][lesson_index],
+                        },
+                    },
                 )
     return parameter_dict
 
 
 def parse_args():
     argparser = argparse.ArgumentParser(
-        formatter_class=argparse.ArgumentDefaultsHelpFormatter
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     argparser.add_argument(
         "trainer_config_path",
@@ -177,17 +177,17 @@ def parse_args():
         default=None,
     )
     argparser.add_argument(
-        "output_config_path", help="Path to write converted YAML file."
+        "output_config_path",
+        help="Path to write converted YAML file.",
     )
-    args = argparser.parse_args()
-    return args
+    return argparser.parse_args()
 
 
 def convert(
-    config: Dict[str, Any],
-    old_curriculum: Optional[Dict[str, Any]],
-    old_param_random: Optional[Dict[str, Any]],
-) -> Dict[str, Any]:
+    config: dict[str, Any],
+    old_curriculum: Optional[dict[str, Any]],
+    old_param_random: Optional[dict[str, Any]],
+) -> dict[str, Any]:
     if "behaviors" not in config:
         print("Config file format version :  version <= 0.16.X")
         behavior_config_dict = convert_behaviors(config)
@@ -211,16 +211,13 @@ def convert(
         param_randomization = config.get("parameter_randomization", {})
         if "resampling-interval" in param_randomization:
             param_randomization.pop("resampling-interval")
-        if len(param_randomization) > 0:
+        if len(param_randomization) > 0 and "sampler-type" in param_randomization[next(iter(param_randomization.keys()))]:
             # check if we use the old format sampler-type vs sampler_type
-            if (
-                "sampler-type"
-                in param_randomization[list(param_randomization.keys())[0]]
-            ):
-                param_randomization = convert_samplers(param_randomization)
+            param_randomization = convert_samplers(param_randomization)
 
         full_config["environment_parameters"] = convert_samplers_and_curriculum(
-            param_randomization, config.get("curriculum", {})
+            param_randomization,
+            config.get("curriculum", {}),
         )
 
         # Convert config to dict
@@ -231,7 +228,7 @@ def convert(
 def main() -> None:
     args = parse_args()
     print(
-        f"Converting {args.trainer_config_path} and saving to {args.output_config_path}."
+        f"Converting {args.trainer_config_path} and saving to {args.output_config_path}.",
     )
 
     old_config = load_config(args.trainer_config_path)

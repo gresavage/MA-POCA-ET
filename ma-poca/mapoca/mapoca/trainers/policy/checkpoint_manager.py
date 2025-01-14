@@ -1,9 +1,13 @@
 # # Unity ML-Agents Toolkit
-from typing import Dict, Any, Optional, List
-import os
+
+from pathlib import Path
+from typing import Any, Optional
+
 import attr
-from mapoca.trainers.training_status import GlobalTrainingStatus, StatusType
+
 from mlagents_envs.logging_util import get_logger
+
+from mapoca.trainers.training_status import GlobalTrainingStatus, StatusType
 
 logger = get_logger(__name__)
 
@@ -14,44 +18,48 @@ class ModelCheckpoint:
     file_path: str
     reward: Optional[float]
     creation_time: float
-    auxillary_file_paths: List[str] = attr.ib(factory=list)
+    auxillary_file_paths: list[str] = attr.ib(factory=list)
 
 
 class ModelCheckpointManager:
     @staticmethod
-    def get_checkpoints(behavior_name: str) -> List[Dict[str, Any]]:
+    def get_checkpoints(behavior_name: str) -> list[dict[str, Any]]:
         checkpoint_list = GlobalTrainingStatus.get_parameter_state(
-            behavior_name, StatusType.CHECKPOINTS
+            behavior_name,
+            StatusType.CHECKPOINTS,
         )
         if not checkpoint_list:
             checkpoint_list = []
             GlobalTrainingStatus.set_parameter_state(
-                behavior_name, StatusType.CHECKPOINTS, checkpoint_list
+                behavior_name,
+                StatusType.CHECKPOINTS,
+                checkpoint_list,
             )
         return checkpoint_list
 
     @staticmethod
-    def remove_checkpoint(checkpoint: Dict[str, Any]) -> None:
+    def remove_checkpoint(checkpoint: dict[str, Any]) -> None:
         """
         Removes a checkpoint stored in checkpoint_list.
         If checkpoint cannot be found, no action is done.
 
         :param checkpoint: A checkpoint stored in checkpoint_list
         """
-        file_paths: List[str] = [checkpoint["file_path"]]
+        file_paths: list[str] = [checkpoint["file_path"]]
         file_paths.extend(checkpoint["auxillary_file_paths"])
         for file_path in file_paths:
-            if os.path.exists(file_path):
-                os.remove(file_path)
+            if Path(file_path).exists():
+                Path(file_path).unlink()
                 logger.debug(f"Removed checkpoint model {file_path}.")
             else:
                 logger.debug(f"Checkpoint at {file_path} could not be found.")
-        return
 
     @classmethod
     def _cleanup_extra_checkpoints(
-        cls, checkpoints: List[Dict], keep_checkpoints: int
-    ) -> List[Dict]:
+        cls,
+        checkpoints: list[dict],
+        keep_checkpoints: int,
+    ) -> list[dict]:
         """
         Ensures that the number of checkpoints stored are within the number
         of checkpoints the user defines. If the limit is hit, checkpoints are
@@ -68,7 +76,10 @@ class ModelCheckpointManager:
 
     @classmethod
     def add_checkpoint(
-        cls, behavior_name: str, new_checkpoint: ModelCheckpoint, keep_checkpoints: int
+        cls,
+        behavior_name: str,
+        new_checkpoint: ModelCheckpoint,
+        keep_checkpoints: int,
     ) -> None:
         """
         Make room for new checkpoint if needed and insert new checkpoint information.
@@ -81,12 +92,16 @@ class ModelCheckpointManager:
         checkpoints.append(new_checkpoint_dict)
         cls._cleanup_extra_checkpoints(checkpoints, keep_checkpoints)
         GlobalTrainingStatus.set_parameter_state(
-            behavior_name, StatusType.CHECKPOINTS, checkpoints
+            behavior_name,
+            StatusType.CHECKPOINTS,
+            checkpoints,
         )
 
     @classmethod
     def track_final_checkpoint(
-        cls, behavior_name: str, final_checkpoint: ModelCheckpoint
+        cls,
+        behavior_name: str,
+        final_checkpoint: ModelCheckpoint,
     ) -> None:
         """
         Ensures number of checkpoints stored is within the max number of checkpoints
@@ -97,5 +112,7 @@ class ModelCheckpointManager:
         """
         final_model_dict = attr.asdict(final_checkpoint)
         GlobalTrainingStatus.set_parameter_state(
-            behavior_name, StatusType.FINAL_CHECKPOINT, final_model_dict
+            behavior_name,
+            StatusType.FINAL_CHECKPOINT,
+            final_model_dict,
         )

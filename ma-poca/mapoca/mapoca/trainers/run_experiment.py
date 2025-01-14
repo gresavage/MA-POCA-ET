@@ -1,13 +1,15 @@
 import argparse
-from typing import Optional, List
+
+from typing import Optional
+
+from mapoca.trainers.cli_utils import load_config
 from mapoca.trainers.learn import run_cli
 from mapoca.trainers.settings import RunOptions
-from mapoca.trainers.cli_utils import load_config
 
 
-def parse_command_line(argv: Optional[List[str]] = None) -> argparse.Namespace:
+def parse_command_line(argv: Optional[list[str]] = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        formatter_class=argparse.ArgumentDefaultsHelpFormatter
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     parser.add_argument("experiment_config_path")
     return parser.parse_args(argv)

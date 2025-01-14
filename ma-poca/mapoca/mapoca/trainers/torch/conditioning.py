@@ -1,13 +1,7 @@
-from mapoca.torch_utils import torch
-from typing import List
 import math
 
-from mapoca.trainers.torch.layers import (
-    linear_layer,
-    Swish,
-    Initialization,
-    LayerNorm,
-)
+from mapoca.torch_utils import torch
+from mapoca.trainers.torch.layers import Initialization, LayerNorm, Swish, linear_layer
 
 
 class ConditionalEncoder(torch.nn.Module):
@@ -37,14 +31,14 @@ class ConditionalEncoder(torch.nn.Module):
         :param kernel_gain: The multiplier for the weights of the kernel.
         """
         super().__init__()
-        layers: List[torch.nn.Module] = []
+        layers: list[torch.nn.Module] = []
         prev_size = input_size
         for i in range(num_layers):
             if num_layers - i <= num_conditional_layers:
                 # This means layer i is a conditional layer since the conditional
                 # leyers are the last num_conditional_layers
                 layers.append(
-                    HyperNetwork(prev_size, hidden_size, goal_size, hidden_size, 2)
+                    HyperNetwork(prev_size, hidden_size, goal_size, hidden_size, 2),
                 )
             else:
                 layers.append(
@@ -53,27 +47,31 @@ class ConditionalEncoder(torch.nn.Module):
                         hidden_size,
                         kernel_init=kernel_init,
                         kernel_gain=kernel_gain,
-                    )
+                    ),
                 )
             layers.append(Swish())
             prev_size = hidden_size
         self.layers = torch.nn.ModuleList(layers)
 
     def forward(
-        self, input_tensor: torch.Tensor, goal_tensor: torch.Tensor
-    ) -> torch.Tensor:  # type: ignore
+        self,
+        input_tensor: torch.Tensor,
+        goal_tensor: torch.Tensor,
+    ) -> torch.Tensor:  # type: ignore[override]
         activation = input_tensor
         for layer in self.layers:
-            if isinstance(layer, HyperNetwork):
-                activation = layer(activation, goal_tensor)
-            else:
-                activation = layer(activation)
+            activation = layer(activation, goal_tensor) if isinstance(layer, HyperNetwork) else layer(activation)
         return activation
 
 
 class HyperNetwork(torch.nn.Module):
     def __init__(
-        self, input_size, output_size, hyper_input_size, layer_size, num_layers
+        self,
+        input_size,
+        output_size,
+        hyper_input_size,
+        layer_size,
+        num_layers,
     ):
         """
         Hyper Network module. This module will use the hyper_input tensor to generate
@@ -84,7 +82,7 @@ class HyperNetwork(torch.nn.Module):
         :param hyper_input_size: The size of the input of the hypernetwork that will
         generate the main network.
         :param layer_size: The number of hidden units in the layers of the hypernetwork
-        :param num_layers: The number of layers of the hypernetwork
+        :param num_layers: The number of layers of the hypernetwork.
         """
         super().__init__()
         self.input_size = input_size
@@ -93,16 +91,16 @@ class HyperNetwork(torch.nn.Module):
         layer_in_size = hyper_input_size
         layers = []
         for _ in range(num_layers):
-            layers.append(
+            layers.extend((
                 linear_layer(
                     layer_in_size,
                     layer_size,
                     kernel_init=Initialization.KaimingHeNormal,
                     kernel_gain=1.0,
                     bias_init=Initialization.Zero,
-                )
-            )
-            layers.append(Swish())
+                ),
+                Swish(),
+            ))
             layer_in_size = layer_size
         flat_output = linear_layer(
             layer_size,
@@ -126,8 +124,4 @@ class HyperNetwork(torch.nn.Module):
 
         output_weights = output_weights.view(-1, self.input_size, self.output_size)
 
-        result = (
-            torch.bmm(input_activation.unsqueeze(1), output_weights).squeeze(1)
-            + self.bias
-        )
-        return result
+        return torch.bmm(input_activation.unsqueeze(1), output_weights).squeeze(1) + self.bias

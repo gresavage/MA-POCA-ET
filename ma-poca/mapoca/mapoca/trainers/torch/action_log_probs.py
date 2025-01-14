@@ -1,10 +1,12 @@
-from typing import List, Optional, NamedTuple
-from mapoca.torch_utils import torch
+from typing import NamedTuple, Optional
+
 import numpy as np
 
-from mapoca.trainers.torch.utils import ModelUtils
+from mlagents_envs.base_env import _ActionTupleBase  # noqa: PLC2701
+
+from mapoca.torch_utils import torch
 from mapoca.trainers.buffer import AgentBuffer, BufferKey
-from mlagents_envs.base_env import _ActionTupleBase
+from mapoca.trainers.torch.utils import ModelUtils
 
 
 class LogProbsTuple(_ActionTupleBase):
@@ -18,9 +20,7 @@ class LogProbsTuple(_ActionTupleBase):
 
     @property
     def discrete_dtype(self) -> np.dtype:
-        """
-        The dtype of a discrete log probability.
-        """
+        """The dtype of a discrete log probability."""
         return np.float32
 
 
@@ -38,21 +38,17 @@ class ActionLogProbs(NamedTuple):
     """
 
     continuous_tensor: torch.Tensor
-    discrete_list: Optional[List[torch.Tensor]]
-    all_discrete_list: Optional[List[torch.Tensor]]
+    discrete_list: Optional[list[torch.Tensor]]
+    all_discrete_list: Optional[list[torch.Tensor]]
 
     @property
     def discrete_tensor(self):
-        """
-        Returns the discrete log probs list as a stacked tensor
-        """
+        """Returns the discrete log probs list as a stacked tensor."""
         return torch.stack(self.discrete_list, dim=-1)
 
     @property
     def all_discrete_tensor(self):
-        """
-        Returns the discrete log probs of each branch as a tensor
-        """
+        """Returns the discrete log probs of each branch as a tensor."""
         return torch.cat(self.all_discrete_list, dim=1)
 
     def to_log_probs_tuple(self) -> LogProbsTuple:
@@ -69,12 +65,12 @@ class ActionLogProbs(NamedTuple):
             log_probs_tuple.add_discrete(discrete)
         return log_probs_tuple
 
-    def _to_tensor_list(self) -> List[torch.Tensor]:
+    def _to_tensor_list(self) -> list[torch.Tensor]:
         """
         Returns the tensors in the ActionLogProbs as a flat List of torch Tensors. This
-        is private and serves as a utility for self.flatten()
+        is private and serves as a utility for self.flatten().
         """
-        tensor_list: List[torch.Tensor] = []
+        tensor_list: list[torch.Tensor] = []
         if self.continuous_tensor is not None:
             tensor_list.append(self.continuous_tensor)
         if self.discrete_list is not None:
@@ -94,18 +90,16 @@ class ActionLogProbs(NamedTuple):
         A static method that accesses continuous and discrete log probs fields in an AgentBuffer
         and constructs the corresponding ActionLogProbs from the retrieved np arrays.
         """
-        continuous: torch.Tensor = None
-        discrete: List[torch.Tensor] = None  # type: ignore
+        continuous: torch.Tensor | None = None
+        discrete: list[torch.Tensor] | None = None
 
         if BufferKey.CONTINUOUS_LOG_PROBS in buff:
             continuous = ModelUtils.list_to_tensor(buff[BufferKey.CONTINUOUS_LOG_PROBS])
         if BufferKey.DISCRETE_LOG_PROBS in buff:
             discrete_tensor = ModelUtils.list_to_tensor(
-                buff[BufferKey.DISCRETE_LOG_PROBS]
+                buff[BufferKey.DISCRETE_LOG_PROBS],
             )
             # This will keep discrete_list = None which enables flatten()
             if discrete_tensor.shape[1] > 0:
-                discrete = [
-                    discrete_tensor[..., i] for i in range(discrete_tensor.shape[-1])
-                ]
+                discrete = [discrete_tensor[..., i] for i in range(discrete_tensor.shape[-1])]
         return ActionLogProbs(continuous, discrete, None)

@@ -1,15 +1,14 @@
-from typing import Tuple
 import threading
-from mapoca.torch_utils import torch
 
 from mlagents_envs.logging_util import get_logger
-from mapoca.trainers.settings import SerializationSettings
 
+from mapoca.torch_utils import torch
+from mapoca.trainers.settings import SerializationSettings
 
 logger = get_logger(__name__)
 
 
-class exporting_to_onnx:
+class exporting_to_onnx:  # noqa: N801
     """
     Set this context by calling
     ```
@@ -21,24 +20,24 @@ class exporting_to_onnx:
 
     # local is_exporting flag for each thread
     _local_data = threading.local()
-    _local_data._is_exporting = False
+    _local_data._is_exporting = False  # noqa: SLF001
 
     # global lock shared among all threads, to make sure only one thread is exporting at a time
     _lock = threading.Lock()
 
     def __enter__(self):
         self._lock.acquire()
-        self._local_data._is_exporting = True
+        self._local_data._is_exporting = True  # noqa: SLF001
 
     def __exit__(self, *args):
-        self._local_data._is_exporting = False
+        self._local_data._is_exporting = False  # noqa: SLF001
         self._lock.release()
 
     @staticmethod
     def is_exporting():
         if not hasattr(exporting_to_onnx._local_data, "_is_exporting"):
             return False
-        return exporting_to_onnx._local_data._is_exporting
+        return exporting_to_onnx._local_data._is_exporting  # noqa: SLF001
 
 
 class TensorNames:
@@ -68,16 +67,12 @@ class TensorNames:
 
     @staticmethod
     def get_visual_observation_name(index: int) -> str:
-        """
-        Returns the name of the visual observation with a given index
-        """
+        """Returns the name of the visual observation with a given index."""
         return TensorNames.visual_observation_placeholder_prefix + str(index)
 
     @staticmethod
     def get_observation_name(index: int) -> str:
-        """
-        Returns the name of the observation with a given index
-        """
+        """Returns the name of the observation with a given index."""
         return TensorNames.observation_placeholder_prefix + str(index)
 
 
@@ -95,16 +90,16 @@ class ModelSerializer:
 
         dummy_obs = [
             torch.zeros(
-                batch_dim + list(ModelSerializer._get_onnx_shape(obs_spec.shape))
+                batch_dim + list(ModelSerializer._get_onnx_shape(obs_spec.shape)),
             )
             for obs_spec in observation_specs
         ]
 
         dummy_masks = torch.ones(
-            batch_dim + [sum(self.policy.behavior_spec.action_spec.discrete_branches)]
+            [*batch_dim, sum(self.policy.behavior_spec.action_spec.discrete_branches)],
         )
         dummy_memories = torch.zeros(
-            batch_dim + seq_len_dim + [self.policy.export_memory_size]
+            batch_dim + seq_len_dim + [self.policy.export_memory_size],
         )
 
         self.dummy_input = (dummy_obs, dummy_masks, dummy_memories)
@@ -124,7 +119,7 @@ class ModelSerializer:
                 TensorNames.continuous_action_output_shape,
             ]
             self.dynamic_axes.update(
-                {TensorNames.continuous_action_output: {0: "batch"}}
+                {TensorNames.continuous_action_output: {0: "batch"}},
             )
         if self.policy.behavior_spec.action_spec.discrete_size > 0:
             self.output_names += [
@@ -137,10 +132,10 @@ class ModelSerializer:
             self.output_names += [TensorNames.recurrent_output]
 
     @staticmethod
-    def _get_onnx_shape(shape: Tuple[int, ...]) -> Tuple[int, ...]:
+    def _get_onnx_shape(shape: tuple[int, ...]) -> tuple[int, ...]:
         """
         Converts the shape of an observation to be compatible with the NCHW format
-        of ONNX
+        of ONNX.
         """
         if len(shape) == 3:
             return shape[2], shape[0], shape[1]

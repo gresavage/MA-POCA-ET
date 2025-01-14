@@ -1,17 +1,16 @@
-import os
-from typing import Dict
+from pathlib import Path
 
 from mlagents_envs.logging_util import get_logger
+
 from mapoca.trainers.environment_parameter_manager import EnvironmentParameterManager
 from mapoca.trainers.exception import TrainerConfigError
-from mapoca.trainers.trainer import Trainer
+from mapoca.trainers.ghost.controller import GhostController
+from mapoca.trainers.ghost.trainer import GhostTrainer
+from mapoca.trainers.poca.trainer import POCATrainer
 from mapoca.trainers.ppo.trainer import PPOTrainer
 from mapoca.trainers.sac.trainer import SACTrainer
-from mapoca.trainers.poca.trainer import POCATrainer
-from mapoca.trainers.ghost.trainer import GhostTrainer
-from mapoca.trainers.ghost.controller import GhostController
 from mapoca.trainers.settings import TrainerSettings, TrainerType
-
+from mapoca.trainers.trainer import Trainer
 
 logger = get_logger(__name__)
 
@@ -19,13 +18,13 @@ logger = get_logger(__name__)
 class TrainerFactory:
     def __init__(
         self,
-        trainer_config: Dict[str, TrainerSettings],
+        trainer_config: dict[str, TrainerSettings],
         output_path: str,
         train_model: bool,
         load_model: bool,
         seed: int,
         param_manager: EnvironmentParameterManager,
-        init_path: str = None,
+        init_path: str | None = None,
         multi_gpu: bool = False,
     ):
         """
@@ -43,7 +42,7 @@ class TrainerFactory:
         :param param_manager: The EnvironmentParameterManager that will dictate when/if
         the EnvironmentParameters must change.
         :param init_path: Path from which to load model.
-        :param multi_gpu: If True, multi-gpu will be used. (currently not available)
+        :param multi_gpu: If True, multi-gpu will be used. (currently not available).
         """
         self.trainer_config = trainer_config
         self.output_path = output_path
@@ -80,7 +79,7 @@ class TrainerFactory:
         ghost_controller: GhostController,
         seed: int,
         param_manager: EnvironmentParameterManager,
-        init_path: str = None,
+        init_path: str | None = None,
         multi_gpu: bool = False,
     ) -> Trainer:
         """
@@ -99,13 +98,13 @@ class TrainerFactory:
         :param init_path: Path from which to load model, if different from model_path.
         :return:
         """
-        trainer_artifact_path = os.path.join(output_path, brain_name)
+        trainer_artifact_path = Path(output_path) / brain_name
         if init_path is not None:
-            trainer_settings.init_path = os.path.join(init_path, brain_name)
+            trainer_settings.init_path = Path(init_path) / brain_name
 
         min_lesson_length = param_manager.get_minimum_reward_buffer_size(brain_name)
 
-        trainer: Trainer = None  # type: ignore  # will be set to one of these, or raise
+        trainer: Trainer = None  # type: ignore[assignment]  # will be set to one of these, or raise
         trainer_type = trainer_settings.trainer_type
 
         if trainer_type == TrainerType.PPO:
@@ -140,7 +139,7 @@ class TrainerFactory:
             )
         else:
             raise TrainerConfigError(
-                f'The trainer config contains an unknown trainer type "{trainer_type}" for brain {brain_name}'
+                f'The trainer config contains an unknown trainer type "{trainer_type}" for brain {brain_name}',
             )
 
         if trainer_settings.self_play is not None:

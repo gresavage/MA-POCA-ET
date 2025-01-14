@@ -1,6 +1,7 @@
-from mlagents_envs.logging_util import get_logger
-from typing import Deque, Dict
 from collections import deque
+
+from mlagents_envs.logging_util import get_logger
+
 from mapoca.trainers.ghost.trainer import GhostTrainer
 
 logger = get_logger(__name__)
@@ -17,15 +18,14 @@ class GhostController:
     def __init__(self, maxlen: int = 10):
         """
         Create a GhostController.
-        :param maxlen: Maximum number of GhostTrainers allowed in this GhostController
+        :param maxlen: Maximum number of GhostTrainers allowed in this GhostController.
         """
-
         # Tracks last swap step for  each learning team because trainer
         # steps of all GhostTrainers do not increment together
-        self._queue: Deque[int] = deque(maxlen=maxlen)
+        self._queue: deque[int] = deque(maxlen=maxlen)
         self._learning_team: int = -1
         # Dict from team id to GhostTrainer for ELO calculation
-        self._ghost_trainers: Dict[int, GhostTrainer] = {}
+        self._ghost_trainers: dict[int, GhostTrainer] = {}
         # Signals to the trainer control to perform a hard change_training_team
         self._changed_training_team = False
 
@@ -33,14 +33,14 @@ class GhostController:
     def get_learning_team(self) -> int:
         """
         Returns the current learning team.
-        :return: The learning team id
+        :return: The learning team id.
         """
         return self._learning_team
 
     def should_reset(self) -> bool:
         """
         Whether or not team change occurred. Causes full reset in trainer_controller
-        :return: The truth value of the team changing
+        :return: The truth value of the team changing.
         """
         changed_team = self._changed_training_team
         if self._changed_training_team:
@@ -65,7 +65,7 @@ class GhostController:
         """
         The current learning team is added to the end of the queue and then updated with the
         next in line.
-        :param step: The step of the trainer for debugging
+        :param step: The step of the trainer for debugging.
         """
         self._queue.append(self._learning_team)
         self._learning_team = self._queue.popleft()

@@ -1,12 +1,13 @@
-from mapoca.torch_utils import torch
 import abc
-from typing import Tuple
+
 from enum import Enum
+
+from mapoca.torch_utils import torch
 from mapoca.trainers.torch.model_serialization import exporting_to_onnx
 
 
 class Swish(torch.nn.Module):
-    def forward(self, data: torch.Tensor) -> torch.Tensor:
+    def forward(self, data: torch.Tensor) -> torch.Tensor:  # noqa: PLR6301
         return torch.mul(data, torch.sigmoid(data))
 
 
@@ -44,13 +45,10 @@ def linear_layer(
     :param kernel_gain: The multiplier for the weights of the kernel. Note that in
     TensorFlow, the gain is square-rooted. Therefore calling  with scale 0.01 is equivalent to calling
         KaimingHeNormal with kernel_gain of 0.1
-    :param bias_init: The Initialization to use for the weights of the bias layer
+    :param bias_init: The Initialization to use for the weights of the bias layer.
     """
     layer = torch.nn.Linear(input_size, output_size)
-    if (
-        kernel_init == Initialization.KaimingHeNormal
-        or kernel_init == Initialization.KaimingHeUniform
-    ):
+    if kernel_init in {Initialization.KaimingHeNormal, Initialization.KaimingHeUniform}:
         _init_methods[kernel_init](layer.weight.data, nonlinearity="linear")
     else:
         _init_methods[kernel_init](layer.weight.data)
@@ -80,17 +78,17 @@ def lstm_layer(
             for idx in range(4):
                 block_size = param.shape[0] // 4
                 _init_methods[kernel_init](
-                    param.data[idx * block_size : (idx + 1) * block_size]
+                    param.data[idx * block_size : (idx + 1) * block_size],
                 )
         if "bias" in name:
             for idx in range(4):
                 block_size = param.shape[0] // 4
                 _init_methods[bias_init](
-                    param.data[idx * block_size : (idx + 1) * block_size]
+                    param.data[idx * block_size : (idx + 1) * block_size],
                 )
                 if idx == 1:
                     param.data[idx * block_size : (idx + 1) * block_size].add_(
-                        forget_bias
+                        forget_bias,
                     )
     return lstm
 
@@ -98,22 +96,20 @@ def lstm_layer(
 class MemoryModule(torch.nn.Module):
     @abc.abstractproperty
     def memory_size(self) -> int:
-        """
-        Size of memory that is required at the start of a sequence.
-        """
-        pass
+        """Size of memory that is required at the start of a sequence."""
 
     @abc.abstractmethod
     def forward(
-        self, input_tensor: torch.Tensor, memories: torch.Tensor
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        self,
+        input_tensor: torch.Tensor,
+        memories: torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
         """
         Pass a sequence to the memory module.
         :input_tensor: Tensor of shape (batch_size, seq_length, size) that represents the input.
         :memories: Tensor of initial memories.
         :return: Tuple of output, final memories.
         """
-        pass
 
 
 class LayerNorm(torch.nn.Module):
@@ -121,19 +117,17 @@ class LayerNorm(torch.nn.Module):
     A vanilla implementation of layer normalization  https://arxiv.org/pdf/1607.06450.pdf
     norm_x = (x - mean) / sqrt((x - mean) ^ 2)
     This does not include the trainable parameters gamma and beta for performance speed.
-    Typically, this is norm_x * gamma + beta
+    Typically, this is norm_x * gamma + beta.
     """
 
-    def forward(self, layer_activations: torch.Tensor) -> torch.Tensor:
+    def forward(self, layer_activations: torch.Tensor) -> torch.Tensor:  # noqa: PLR6301
         mean = torch.mean(layer_activations, dim=-1, keepdim=True)
         var = torch.mean((layer_activations - mean) ** 2, dim=-1, keepdim=True)
         return (layer_activations - mean) / (torch.sqrt(var + 1e-5))
 
 
 class LinearEncoder(torch.nn.Module):
-    """
-    Linear layers.
-    """
+    """Linear layers."""
 
     def __init__(
         self,
@@ -150,7 +144,7 @@ class LinearEncoder(torch.nn.Module):
                 hidden_size,
                 kernel_init=kernel_init,
                 kernel_gain=kernel_gain,
-            )
+            ),
         ]
         self.layers.append(Swish())
         for _ in range(num_layers - 1):
@@ -160,7 +154,7 @@ class LinearEncoder(torch.nn.Module):
                     hidden_size,
                     kernel_init=kernel_init,
                     kernel_gain=kernel_gain,
-                )
+                ),
             )
             self.layers.append(Swish())
         self.seq_layers = torch.nn.Sequential(*self.layers)
@@ -170,9 +164,7 @@ class LinearEncoder(torch.nn.Module):
 
 
 class LSTM(MemoryModule):
-    """
-    Memory module that implements LSTM.
-    """
+    """Memory module that implements LSTM."""
 
     def __init__(
         self,
@@ -202,9 +194,10 @@ class LSTM(MemoryModule):
         return 2 * self.hidden_size
 
     def forward(
-        self, input_tensor: torch.Tensor, memories: torch.Tensor
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
-
+        self,
+        input_tensor: torch.Tensor,
+        memories: torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
         if exporting_to_onnx.is_exporting():
             # This transpose is needed both at input and output of the LSTM when
             # exporting because ONNX will expect (sequence_len, batch, memory_size)

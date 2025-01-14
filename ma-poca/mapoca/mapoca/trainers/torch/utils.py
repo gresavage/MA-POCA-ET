@@ -1,26 +1,28 @@
-from typing import List, Optional, Tuple, Dict
-from mapoca.torch_utils import torch, nn
-from mapoca.trainers.torch.layers import LinearEncoder, Initialization
+from typing import Optional
+
 import numpy as np
 
-from mapoca.trainers.torch.encoders import (
-    SimpleVisualEncoder,
-    ResNetVisualEncoder,
-    NatureVisualEncoder,
-    SmallVisualEncoder,
-    FullyConnectedVisualEncoder,
-    VectorInput,
-)
+from mlagents_envs.base_env import DimensionProperty, ObservationSpec
+
+from mapoca.torch_utils import nn, torch
+from mapoca.trainers.exception import UnityTrainerException
 from mapoca.trainers.settings import EncoderType, ScheduleType
 from mapoca.trainers.torch.attention import EntityEmbedding, ResidualSelfAttention
-from mapoca.trainers.exception import UnityTrainerException
-from mlagents_envs.base_env import ObservationSpec, DimensionProperty
+from mapoca.trainers.torch.encoders import (
+    FullyConnectedVisualEncoder,
+    NatureVisualEncoder,
+    ResNetVisualEncoder,
+    SimpleVisualEncoder,
+    SmallVisualEncoder,
+    VectorInput,
+)
+from mapoca.trainers.torch.layers import Initialization, LinearEncoder
 
 
 class ModelUtils:
     # Minimum supported side for each encoder type. If refactoring an encoder, please
     # adjust these also.
-    MIN_RESOLUTION_FOR_ENCODER = {
+    MIN_RESOLUTION_FOR_ENCODER = {  # noqa: RUF012
         EncoderType.FULLY_CONNECTED: 1,
         EncoderType.MATCH3: 5,
         EncoderType.SIMPLE: 20,
@@ -36,15 +38,15 @@ class ModelUtils:
                 DimensionProperty.NONE,
             ),
             (DimensionProperty.UNSPECIFIED,) * 3,
-        ]
+        ],
     )
 
     VALID_VECTOR_PROP = frozenset(
-        [(DimensionProperty.NONE,), (DimensionProperty.UNSPECIFIED,)]
+        [(DimensionProperty.NONE,), (DimensionProperty.UNSPECIFIED,)],
     )
 
     VALID_VAR_LEN_PROP = frozenset(
-        [(DimensionProperty.VARIABLE_SIZE, DimensionProperty.NONE)]
+        [(DimensionProperty.VARIABLE_SIZE, DimensionProperty.NONE)],
     )
 
     @staticmethod
@@ -52,7 +54,7 @@ class ModelUtils:
         """
         Apply a learning rate to a torch optimizer.
         :param optim: Optimizer
-        :param lr: Learning rate
+        :param lr: Learning rate.
         """
         for param_group in optim.param_groups:
             param_group["lr"] = lr
@@ -88,12 +90,14 @@ class ModelUtils:
             """
             if self.schedule == ScheduleType.CONSTANT:
                 return self.initial_value
-            elif self.schedule == ScheduleType.LINEAR:
+            if self.schedule == ScheduleType.LINEAR:
                 return ModelUtils.polynomial_decay(
-                    self.initial_value, self.min_value, self.max_step, global_step
+                    self.initial_value,
+                    self.min_value,
+                    self.max_step,
+                    global_step,
                 )
-            else:
-                raise UnityTrainerException(f"The schedule {self.schedule} is invalid.")
+            raise UnityTrainerException(f"The schedule {self.schedule} is invalid.")
 
     @staticmethod
     def polynomial_decay(
@@ -113,14 +117,11 @@ class ModelUtils:
         :return: The current decayed value.
         """
         global_step = min(global_step, max_step)
-        decayed_value = (initial_value - min_value) * (
-            1 - float(global_step) / max_step
-        ) ** (power) + min_value
-        return decayed_value
+        return (initial_value - min_value) * (1 - float(global_step) / max_step) ** (power) + min_value
 
     @staticmethod
     def get_encoder_for_type(encoder_type: EncoderType) -> nn.Module:
-        ENCODER_FUNCTION_BY_TYPE = {
+        ENCODER_FUNCTION_BY_TYPE = {  # noqa: N806
             EncoderType.SIMPLE: SimpleVisualEncoder,
             EncoderType.NATURE_CNN: NatureVisualEncoder,
             EncoderType.RESNET: ResNetVisualEncoder,
@@ -131,13 +132,15 @@ class ModelUtils:
 
     @staticmethod
     def _check_resolution_for_encoder(
-        height: int, width: int, vis_encoder_type: EncoderType
+        height: int,
+        width: int,
+        vis_encoder_type: EncoderType,
     ) -> None:
         min_res = ModelUtils.MIN_RESOLUTION_FOR_ENCODER[vis_encoder_type]
         if height < min_res or width < min_res:
             raise UnityTrainerException(
                 f"Visual observation resolution ({width}x{height}) is too small for"
-                f"the provided EncoderType ({vis_encoder_type.value}). The min dimension is {min_res}"
+                f"the provided EncoderType ({vis_encoder_type.value}). The min dimension is {min_res}",
             )
 
     @staticmethod
@@ -147,7 +150,7 @@ class ModelUtils:
         h_size: int,
         attention_embedding_size: int,
         vis_encode_type: EncoderType,
-    ) -> Tuple[nn.Module, int]:
+    ) -> tuple[nn.Module, int]:
         """
         Returns the encoder and the size of the appropriate encoder.
         :param shape: Tuples that represent the observation dimension.
@@ -163,7 +166,9 @@ class ModelUtils:
         if dim_prop in ModelUtils.VALID_VISUAL_PROP:
             visual_encoder_class = ModelUtils.get_encoder_for_type(vis_encode_type)
             ModelUtils._check_resolution_for_encoder(
-                shape[0], shape[1], vis_encode_type
+                shape[0],
+                shape[1],
+                vis_encode_type,
             )
             return (visual_encoder_class(shape[0], shape[1], shape[2], h_size), h_size)
         # VECTOR
@@ -184,12 +189,12 @@ class ModelUtils:
 
     @staticmethod
     def create_input_processors(
-        observation_specs: List[ObservationSpec],
+        observation_specs: list[ObservationSpec],
         h_size: int,
         vis_encode_type: EncoderType,
         attention_embedding_size: int,
         normalize: bool = False,
-    ) -> Tuple[nn.ModuleList, List[int]]:
+    ) -> tuple[nn.ModuleList, list[int]]:
         """
         Creates visual and vector encoders, along with their normalizers.
         :param observation_specs: List of ObservationSpec that represent the observation dimensions.
@@ -204,13 +209,17 @@ class ModelUtils:
         :return: Tuple of :
          - ModuleList of the encoders
          - A list of embedding sizes (0 if the input requires to be processed with a variable length
-         observation encoder)
+         observation encoder).
         """
-        encoders: List[nn.Module] = []
-        embedding_sizes: List[int] = []
+        encoders: list[nn.Module] = []
+        embedding_sizes: list[int] = []
         for obs_spec in observation_specs:
             encoder, embedding_size = ModelUtils.get_encoder_for_obs(
-                obs_spec, normalize, h_size, attention_embedding_size, vis_encode_type
+                obs_spec,
+                normalize,
+                h_size,
+                attention_embedding_size,
+                vis_encode_type,
             )
             encoders.append(encoder)
             embedding_sizes.append(embedding_size)
@@ -224,7 +233,8 @@ class ModelUtils:
 
     @staticmethod
     def list_to_tensor(
-        ndarray_list: List[np.ndarray], dtype: Optional[torch.dtype] = torch.float32
+        ndarray_list: list[np.ndarray],
+        dtype: Optional[torch.dtype] = torch.float32,
     ) -> torch.Tensor:
         """
         Converts a list of numpy arrays into a tensor. MUCH faster than
@@ -234,15 +244,14 @@ class ModelUtils:
 
     @staticmethod
     def list_to_tensor_list(
-        ndarray_list: List[np.ndarray], dtype: Optional[torch.dtype] = torch.float32
+        ndarray_list: list[np.ndarray],
+        dtype: Optional[torch.dtype] = torch.float32,
     ) -> torch.Tensor:
         """
         Converts a list of numpy arrays into a list of tensors. MUCH faster than
         calling as_tensor on the list directly.
         """
-        return [
-            torch.as_tensor(np.asanyarray(_arr), dtype=dtype) for _arr in ndarray_list
-        ]
+        return [torch.as_tensor(np.asanyarray(_arr), dtype=dtype) for _arr in ndarray_list]
 
     @staticmethod
     def to_numpy(tensor: torch.Tensor) -> np.ndarray:
@@ -254,8 +263,9 @@ class ModelUtils:
 
     @staticmethod
     def break_into_branches(
-        concatenated_logits: torch.Tensor, action_size: List[int]
-    ) -> List[torch.Tensor]:
+        concatenated_logits: torch.Tensor,
+        action_size: list[int],
+    ) -> list[torch.Tensor]:
         """
         Takes a concatenated set of logits that represent multiple discrete action branches
         and breaks it up into one Tensor per branch.
@@ -263,17 +273,14 @@ class ModelUtils:
         :param action_size: List of ints containing the number of possible actions for each branch.
         :return: A List of Tensors containing one tensor per branch.
         """
-        action_idx = [0] + list(np.cumsum(action_size))
-        branched_logits = [
-            concatenated_logits[:, action_idx[i] : action_idx[i + 1]]
-            for i in range(len(action_size))
-        ]
-        return branched_logits
+        action_idx = [0, *list(np.cumsum(action_size))]
+        return [concatenated_logits[:, action_idx[i] : action_idx[i + 1]] for i in range(len(action_size))]
 
     @staticmethod
     def actions_to_onehot(
-        discrete_actions: torch.Tensor, action_size: List[int]
-    ) -> List[torch.Tensor]:
+        discrete_actions: torch.Tensor,
+        action_size: list[int],
+    ) -> list[torch.Tensor]:
         """
         Takes a tensor of discrete actions and turns it into a List of onehot encoding for each
         action.
@@ -282,16 +289,14 @@ class ModelUtils:
         last dimension.
         :return: List of one-hot tensors, one representing each branch.
         """
-        onehot_branches = [
-            torch.nn.functional.one_hot(_act.T, action_size[i]).float()
-            for i, _act in enumerate(discrete_actions.long().T)
-        ]
-        return onehot_branches
+        return [torch.nn.functional.one_hot(_act.T, action_size[i]).float() for i, _act in enumerate(discrete_actions.long().T)]
 
     @staticmethod
     def dynamic_partition(
-        data: torch.Tensor, partitions: torch.Tensor, num_partitions: int
-    ) -> List[torch.Tensor]:
+        data: torch.Tensor,
+        partitions: torch.Tensor,
+        num_partitions: int,
+    ) -> list[torch.Tensor]:
         """
         Torch implementation of dynamic_partition :
         https://www.tensorflow.org/api_docs/python/tf/dynamic_partition
@@ -304,7 +309,7 @@ class ModelUtils:
         maximum possible index in the partitions argument.
         :return: A list of Tensor partitions (Their indices correspond to their partition index).
         """
-        res: List[torch.Tensor] = []
+        res: list[torch.Tensor] = []
         for i in range(num_partitions):
             res += [data[(partitions == i).nonzero().squeeze(1)]]
         return res
@@ -318,7 +323,8 @@ class ModelUtils:
         :param masks: Boolean tensor of masks with same dimension as tensor.
         """
         return (tensor.T * masks).sum() / torch.clamp(
-            (torch.ones_like(tensor.T) * masks).float().sum(), min=1.0
+            (torch.ones_like(tensor.T) * masks).float().sum(),
+            min=1.0,
         )
 
     @staticmethod
@@ -335,7 +341,9 @@ class ModelUtils:
         """
         with torch.no_grad():
             for source_param, target_param in zip(
-                source.parameters(), target.parameters()
+                source.parameters(),
+                target.parameters(),
+                strict=False,
             ):
                 target_param.data.mul_(1.0 - tau)
                 torch.add(
@@ -347,8 +355,10 @@ class ModelUtils:
 
     @staticmethod
     def create_residual_self_attention(
-        input_processors: nn.ModuleList, embedding_sizes: List[int], hidden_size: int
-    ) -> Tuple[Optional[ResidualSelfAttention], Optional[LinearEncoder]]:
+        input_processors: nn.ModuleList,
+        embedding_sizes: list[int],
+        hidden_size: int,
+    ) -> tuple[Optional[ResidualSelfAttention], Optional[LinearEncoder]]:
         """
         Creates an RSA if there are variable length observations found in the input processors.
         :param input_processors: A ModuleList of input processors as returned by the function
@@ -380,11 +390,12 @@ class ModelUtils:
 
     @staticmethod
     def trust_region_value_loss(
-        values: Dict[str, torch.Tensor],
-        old_values: Dict[str, torch.Tensor],
-        returns: Dict[str, torch.Tensor],
+        values: dict[str, torch.Tensor],
+        old_values: dict[str, torch.Tensor],
+        returns: dict[str, torch.Tensor],
         epsilon: float,
         loss_masks: torch.Tensor,
+        reduce: bool = True,
     ) -> torch.Tensor:
         """
         Evaluates value loss, clipping to stay within a trust region of old value estimates.
@@ -394,20 +405,27 @@ class ModelUtils:
         :param returns: Computed returns.
         :param epsilon: Clipping value for value estimate.
         :param loss_mask: Mask for losses. Used with LSTM to ignore 0'ed out experiences.
+        :param reduce: Optionally return the batch mean of the loss or not
         """
         value_losses = []
         for name, head in values.items():
             old_val_tensor = old_values[name]
             returns_tensor = returns[name]
             clipped_value_estimate = old_val_tensor + torch.clamp(
-                head - old_val_tensor, -1 * epsilon, epsilon
+                head - old_val_tensor,
+                -1 * epsilon,
+                epsilon,
             )
             v_opt_a = (returns_tensor - head) ** 2
             v_opt_b = (returns_tensor - clipped_value_estimate) ** 2
-            value_loss = ModelUtils.masked_mean(torch.max(v_opt_a, v_opt_b), loss_masks)
+            value_loss = torch.max(v_opt_a, v_opt_b)
+            value_loss = ModelUtils.masked_mean(value_loss, loss_masks) if reduce else value_loss * loss_masks.T
             value_losses.append(value_loss)
-        value_loss = torch.mean(torch.stack(value_losses))
-        return value_loss
+        # optionally return the loss for each step
+        stacked = torch.stack(value_losses)
+        if reduce:
+            return torch.mean(stacked)
+        return stacked
 
     @staticmethod
     def trust_region_policy_loss(
@@ -416,6 +434,7 @@ class ModelUtils:
         old_log_probs: torch.Tensor,
         loss_masks: torch.Tensor,
         epsilon: float,
+        reduce: bool = True,
     ) -> torch.Tensor:
         """
         Evaluate policy loss clipped to stay within a trust region. Used for PPO and POCA.
@@ -423,12 +442,16 @@ class ModelUtils:
         :param log_probs: Current policy probabilities
         :param old_log_probs: Past policy probabilities
         :param loss_masks: Mask for losses. Used with LSTM to ignore 0'ed out experiences.
+        :param reduce: Optionally return the batch mean of the loss or not
         """
         advantage = advantages.unsqueeze(-1)
         r_theta = torch.exp(log_probs - old_log_probs)
         p_opt_a = r_theta * advantage
         p_opt_b = torch.clamp(r_theta, 1.0 - epsilon, 1.0 + epsilon) * advantage
-        policy_loss = -1 * ModelUtils.masked_mean(
-            torch.min(p_opt_a, p_opt_b), loss_masks
-        )
-        return policy_loss
+        loss = torch.min(p_opt_a, p_opt_b)
+        if reduce:
+            return -1 * ModelUtils.masked_mean(
+                loss,
+                loss_masks,
+            )
+        return -1 * loss * loss_masks.T

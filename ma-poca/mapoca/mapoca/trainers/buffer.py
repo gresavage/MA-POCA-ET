@@ -1,25 +1,23 @@
-from collections import defaultdict
-from collections.abc import MutableMapping
 import enum
 import itertools
-from typing import BinaryIO, DefaultDict, List, Tuple, Union, Optional
+
+from collections import defaultdict
+from collections.abc import MutableMapping
+from typing import BinaryIO, Optional, Union
 
 import numpy as np
+
 import h5py
 
 from mlagents_envs.exception import UnityException
 
 # Elements in the buffer can be np.ndarray, or in the case of teammate obs, actions, rewards,
 # a List of np.ndarray. This is done so that we don't have duplicated np.ndarrays, only references.
-BufferEntry = Union[np.ndarray, List[np.ndarray]]
+BufferEntry = Union[np.ndarray, list[np.ndarray]]
 
 
 class BufferException(UnityException):
-    """
-    Related to errors with the Buffer.
-    """
-
-    pass
+    """Related to errors with the Buffer."""
 
 
 class BufferKey(enum.Enum):
@@ -37,6 +35,8 @@ class BufferKey(enum.Enum):
     CRITIC_MEMORY = "critic_memory"
     BASELINE_MEMORY = "poca_baseline_memory"
     PREV_ACTION = "prev_action"
+    STEP = "step"
+    EPISODE_ID = "episode_id"
 
     ADVANTAGES = "advantages"
     DISCOUNTED_RETURNS = "discounted_returns"
@@ -65,10 +65,13 @@ class RewardSignalKeyPrefix(enum.Enum):
     RETURNS = "returns"
     ADVANTAGE = "advantage"
     BASELINES = "baselines"
+    TRACE = "trace"
 
 
 AgentBufferKey = Union[
-    BufferKey, Tuple[ObservationKeyPrefix, int], Tuple[RewardSignalKeyPrefix, str]
+    BufferKey,
+    tuple[ObservationKeyPrefix, int],
+    tuple[RewardSignalKeyPrefix, str],
 ]
 
 
@@ -94,7 +97,7 @@ class RewardSignalUtil:
         return RewardSignalKeyPrefix.BASELINES, name
 
 
-class AgentBufferField(list):
+class AgentBufferField(list):  # noqa: FURB189
     """
     AgentBufferField is a list of numpy arrays, or List[np.ndarray] for group entries.
     When an agent collects a field, you can add it to its AgentBufferField with the append method.
@@ -111,14 +114,11 @@ class AgentBufferField(list):
         return_data = super().__getitem__(index)
         if isinstance(return_data, list):
             return AgentBufferField(return_data)
-        else:
-            return return_data
+        return return_data
 
     @property
     def contains_lists(self) -> bool:
-        """
-        Checks whether this AgentBufferField contains List[np.ndarray].
-        """
+        """Checks whether this AgentBufferField contains List[np.ndarray]."""
         return len(self) > 0 and isinstance(self[0], list)
 
     def append(self, element: BufferEntry, padding_value: float = 0.0) -> None:
@@ -132,7 +132,7 @@ class AgentBufferField(list):
         super().append(element)
         self.padding_value = padding_value
 
-    def set(self, data: List[BufferEntry]) -> None:
+    def set(self, data: list[BufferEntry]) -> None:
         """
         Sets the list of BufferEntry to the input data
         :param data: The BufferEntry list to be set.
@@ -142,10 +142,10 @@ class AgentBufferField(list):
 
     def get_batch(
         self,
-        batch_size: int = None,
+        batch_size: int | None = None,
         training_length: Optional[int] = 1,
         sequential: bool = True,
-    ) -> List[BufferEntry]:
+    ) -> list[BufferEntry]:
         """
         Retrieve the last batch_size elements of length training_length
         from the list of np.array
@@ -156,7 +156,7 @@ class AgentBufferField(list):
         :param sequential: If true and training_length is not None: the elements
         will not repeat in the sequence. [a,b,c,d,e] with training_length = 2 and
         sequential=True gives [[0,a],[b,c],[d,e]]. If sequential=False gives
-        [[a,b],[b,c],[c,d],[d,e]]
+        [[a,b],[b,c],[c,d],[d,e]].
         """
         if training_length is None:
             training_length = 1
@@ -171,45 +171,38 @@ class AgentBufferField(list):
             # with padding is equal to batch_size
             if batch_size > (len(self) // training_length + 1 * (leftover != 0)):
                 raise BufferException(
-                    "The batch size and training length requested for get_batch where"
-                    " too large given the current number of data points."
+                    "The batch size and training length requested for get_batch where too large given the current number of data points.",
                 )
             if batch_size * training_length > len(self):
-                if self.contains_lists:
-                    padding = []
-                else:
-                    # We want to duplicate the last value in the array, multiplied by the padding_value.
-                    padding = np.array(self[-1], dtype=np.float32) * self.padding_value
+                # We want to duplicate the last value in the array, multiplied by the padding_value.
+                padding = [] if self.contains_lists else np.array(self[-1], dtype=np.float32) * self.padding_value
                 return self[:] + [padding] * (training_length - leftover)
 
-            else:
-                return self[len(self) - batch_size * training_length :]
-        else:
-            # The sequences will have overlapping elements
-            if batch_size is None:
-                # retrieve the maximum number of elements
-                batch_size = len(self) - training_length + 1
-            # The number of sequences of length training_length taken from a list of len(self) elements
-            # with overlapping is equal to batch_size
-            if (len(self) - training_length + 1) < batch_size:
-                raise BufferException(
-                    "The batch size and training length requested for get_batch where"
-                    " too large given the current number of data points."
-                )
-            tmp_list: List[np.ndarray] = []
-            for end in range(len(self) - batch_size + 1, len(self) + 1):
-                tmp_list += self[end - training_length : end]
-            return tmp_list
+            return self[len(self) - batch_size * training_length :]
+        # The sequences will have overlapping elements
+        if batch_size is None:
+            # retrieve the maximum number of elements
+            batch_size = len(self) - training_length + 1
+        # The number of sequences of length training_length taken from a list of len(self) elements
+        # with overlapping is equal to batch_size
+        if (len(self) - training_length + 1) < batch_size:
+            raise BufferException(
+                "The batch size and training length requested for get_batch where too large given the current number of data points.",
+            )
+        tmp_list: list[np.ndarray] = []
+        for end in range(len(self) - batch_size + 1, len(self) + 1):
+            tmp_list += self[end - training_length : end]
+        return tmp_list
 
     def reset_field(self) -> None:
-        """
-        Resets the AgentBufferField
-        """
+        """Resets the AgentBufferField."""
         self[:] = []
 
     def padded_to_batch(
-        self, pad_value: np.float = 0, dtype: np.dtype = np.float32
-    ) -> Union[np.ndarray, List[np.ndarray]]:
+        self,
+        pad_value: float = 0,
+        dtype: np.dtype = np.float32,
+    ) -> Union[np.ndarray, list[np.ndarray]]:
         """
         Converts this AgentBufferField (which is a List[BufferEntry]) into a numpy array
         with first dimension equal to the length of this AgentBufferField. If this AgentBufferField
@@ -237,19 +230,13 @@ class AgentBufferField(list):
             return []
 
         # Convert to numpy array while padding with 0's
-        new_list = list(
-            map(
-                lambda x: np.asanyarray(x, dtype=dtype),
-                itertools.zip_longest(*self, fillvalue=np.full(shape, pad_value)),
-            )
-        )
-        return new_list
+        return [np.asanyarray(x, dtype=dtype) for x in itertools.zip_longest(*self, fillvalue=np.full(shape, pad_value))]
 
 
 class AgentBuffer(MutableMapping):
     """
     AgentBuffer contains a dictionary of AgentBufferFields. Each agent has his own AgentBuffer.
-    The keys correspond to the name of the field. Example: state, action
+    The keys correspond to the name of the field. Example: state, action.
     """
 
     # Whether or not to validate the types of keys at runtime
@@ -259,19 +246,17 @@ class AgentBuffer(MutableMapping):
     def __init__(self):
         self.last_brain_info = None
         self.last_take_action_outputs = None
-        self._fields: DefaultDict[AgentBufferKey, AgentBufferField] = defaultdict(
-            AgentBufferField
+        self._fields: defaultdict[AgentBufferKey, AgentBufferField] = defaultdict(
+            AgentBufferField,
         )
 
     def __str__(self):
         return ", ".join(
-            ["'{}' : {}".format(k, str(self[k])) for k in self._fields.keys()]
+            [f"'{k}' : {self[k]!s}" for k in self._fields],
         )
 
     def reset_agent(self) -> None:
-        """
-        Resets the AgentBuffer
-        """
+        """Resets the AgentBuffer."""
         for f in self._fields.values():
             f.reset_field()
         self.last_brain_info = None
@@ -295,9 +280,7 @@ class AgentBuffer(MutableMapping):
 
     @staticmethod
     def _encode_key(key: AgentBufferKey) -> str:
-        """
-        Convert the key to a string representation so that it can be used for serialization.
-        """
+        """Convert the key to a string representation so that it can be used for serialization."""
         if isinstance(key, BufferKey):
             return key.value
         prefix, suffix = key
@@ -305,9 +288,7 @@ class AgentBuffer(MutableMapping):
 
     @staticmethod
     def _decode_key(encoded_key: str) -> AgentBufferKey:
-        """
-        Convert the string representation back to a key after serialization.
-        """
+        """Convert the string representation back to a key after serialization."""
         # Simple case: convert the string directly to a BufferKey
         try:
             return BufferKey(encoded_key)
@@ -326,8 +307,8 @@ class AgentBuffer(MutableMapping):
         # If not, it had better be a RewardSignalKeyPrefix
         try:
             return RewardSignalKeyPrefix(prefix_str), suffix_str
-        except ValueError:
-            raise ValueError(f"Unable to convert {encoded_key} to an AgentBufferKey")
+        except ValueError as err:
+            raise ValueError(f"Unable to convert {encoded_key} to an AgentBufferKey") from err
 
     def __getitem__(self, key: AgentBufferKey) -> AgentBufferField:
         if self.CHECK_KEY_TYPES_AT_RUNTIME:
@@ -355,12 +336,12 @@ class AgentBuffer(MutableMapping):
             self._check_key(key)
         return self._fields.__contains__(key)
 
-    def check_length(self, key_list: List[AgentBufferKey]) -> bool:
+    def check_length(self, key_list: list[AgentBufferKey]) -> bool:
         """
         Some methods will require that some fields have the same length.
         check_length will return true if the fields in key_list
         have the same length.
-        :param key_list: The fields which length will be compared
+        :param key_list: The fields which length will be compared.
         """
         if self.CHECK_KEY_TYPES_AT_RUNTIME:
             for k in key_list:
@@ -378,7 +359,9 @@ class AgentBuffer(MutableMapping):
         return True
 
     def shuffle(
-        self, sequence_length: int, key_list: List[AgentBufferKey] = None
+        self,
+        sequence_length: int,
+        key_list: list[AgentBufferKey] | None = None,
     ) -> None:
         """
         Shuffles the fields in key_list in a consistent way: The reordering will
@@ -389,13 +372,13 @@ class AgentBuffer(MutableMapping):
             key_list = list(self._fields.keys())
         if not self.check_length(key_list):
             raise BufferException(
-                "Unable to shuffle if the fields are not of same length"
+                "Unable to shuffle if the fields are not of same length",
             )
         s = np.arange(len(self[key_list[0]]) // sequence_length)
         np.random.shuffle(s)
         for key in key_list:
             buffer_field = self[key]
-            tmp: List[np.ndarray] = []
+            tmp: list[np.ndarray] = []
             for i in s:
                 tmp += buffer_field[i * sequence_length : (i + 1) * sequence_length]
             buffer_field.set(tmp)
@@ -414,7 +397,9 @@ class AgentBuffer(MutableMapping):
         return mini_batch
 
     def sample_mini_batch(
-        self, batch_size: int, sequence_length: int = 1
+        self,
+        batch_size: int,
+        sequence_length: int = 1,
     ) -> "AgentBuffer":
         """
         Creates a mini-batch from a random start and end.
@@ -426,10 +411,7 @@ class AgentBuffer(MutableMapping):
         mini_batch = AgentBuffer()
         buff_len = self.num_experiences
         num_sequences_in_buffer = buff_len // sequence_length
-        start_idxes = (
-            np.random.randint(num_sequences_in_buffer, size=num_seq_to_sample)
-            * sequence_length
-        )  # Sample random sequence starts
+        start_idxes = np.random.randint(num_sequences_in_buffer, size=num_seq_to_sample) * sequence_length  # Sample random sequence starts
         for key in self:
             buffer_field = self[key]
             mb_list = (buffer_field[i : i + sequence_length] for i in start_idxes)
@@ -439,19 +421,18 @@ class AgentBuffer(MutableMapping):
         return mini_batch
 
     def save_to_file(self, file_object: BinaryIO) -> None:
-        """
-        Saves the AgentBuffer to a file-like object.
-        """
+        """Saves the AgentBuffer to a file-like object."""
         with h5py.File(file_object, "w") as write_file:
             for key, data in self.items():
                 write_file.create_dataset(
-                    self._encode_key(key), data=data, dtype="f", compression="gzip"
+                    self._encode_key(key),
+                    data=data,
+                    dtype="f",
+                    compression="gzip",
                 )
 
     def load_from_file(self, file_object: BinaryIO) -> None:
-        """
-        Loads the AgentBuffer from a file-like object.
-        """
+        """Loads the AgentBuffer from a file-like object."""
         with h5py.File(file_object, "r") as read_file:
             for key in list(read_file.keys()):
                 decoded_key = self._decode_key(key)
@@ -477,9 +458,9 @@ class AgentBuffer(MutableMapping):
     def resequence_and_append(
         self,
         target_buffer: "AgentBuffer",
-        key_list: List[AgentBufferKey] = None,
-        batch_size: int = None,
-        training_length: int = None,
+        key_list: list[AgentBufferKey] | None = None,
+        batch_size: int | None = None,
+        training_length: int | None = None,
     ) -> None:
         """
         Takes in a batch size and training length (sequence length), and appends this AgentBuffer to target_buffer
@@ -494,13 +475,14 @@ class AgentBuffer(MutableMapping):
             key_list = list(self.keys())
         if not self.check_length(key_list):
             raise BufferException(
-                f"The length of the fields {key_list} were not of same length"
+                f"The length of the fields {key_list} were not of same length",
             )
         for field_key in key_list:
             target_buffer[field_key].extend(
                 self[field_key].get_batch(
-                    batch_size=batch_size, training_length=training_length
-                )
+                    batch_size=batch_size,
+                    training_length=training_length,
+                ),
             )
 
     @property
@@ -514,5 +496,4 @@ class AgentBuffer(MutableMapping):
         """
         if self.values():
             return len(next(iter(self.values())))
-        else:
-            return 0
+        return 0

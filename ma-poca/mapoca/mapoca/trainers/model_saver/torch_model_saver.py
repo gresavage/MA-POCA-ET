@@ -1,26 +1,29 @@
-import os
 import shutil
-from mapoca.torch_utils import torch
-from typing import Dict, Union, Optional, cast, Tuple, List
+
+from pathlib import Path
+from typing import Optional, Union, cast
+
 from mlagents_envs.exception import UnityPolicyException
 from mlagents_envs.logging_util import get_logger
-from mapoca.trainers.model_saver.model_saver import BaseModelSaver
-from mapoca.trainers.settings import TrainerSettings, SerializationSettings
-from mapoca.trainers.policy.torch_policy import TorchPolicy
-from mapoca.trainers.optimizer.torch_optimizer import TorchOptimizer
-from mapoca.trainers.torch.model_serialization import ModelSerializer
 
+from mapoca.torch_utils import torch
+from mapoca.trainers.model_saver.model_saver import BaseModelSaver
+from mapoca.trainers.optimizer.torch_optimizer import TorchOptimizer
+from mapoca.trainers.policy.torch_policy import TorchPolicy
+from mapoca.trainers.settings import SerializationSettings, TrainerSettings
+from mapoca.trainers.torch.model_serialization import ModelSerializer
 
 logger = get_logger(__name__)
 
 
 class TorchModelSaver(BaseModelSaver):
-    """
-    ModelSaver class for PyTorch
-    """
+    """ModelSaver class for PyTorch."""
 
     def __init__(
-        self, trainer_settings: TrainerSettings, model_path: str, load: bool = False
+        self,
+        trainer_settings: TrainerSettings,
+        model_path: str,
+        load: bool = False,
     ):
         super().__init__()
         self.model_path = model_path
@@ -30,32 +33,28 @@ class TorchModelSaver(BaseModelSaver):
 
         self.policy: Optional[TorchPolicy] = None
         self.exporter: Optional[ModelSerializer] = None
-        self.modules: Dict[str, torch.nn.Modules] = {}
+        self.modules: dict[str, torch.nn.Modules] = {}
 
     def register(self, module: Union[TorchPolicy, TorchOptimizer]) -> None:
-        if isinstance(module, TorchPolicy) or isinstance(module, TorchOptimizer):
-            self.modules.update(module.get_modules())  # type: ignore
+        if isinstance(module, TorchPolicy | TorchOptimizer):
+            self.modules.update(module.get_modules())
         else:
             raise UnityPolicyException(
-                "Registering Object of unsupported type {} to ModelSaver ".format(
-                    type(module)
-                )
+                f"Registering Object of unsupported type {type(module)} to ModelSaver ",
             )
         if self.policy is None and isinstance(module, TorchPolicy):
             self.policy = module
             self.exporter = ModelSerializer(self.policy)
 
-    def save_checkpoint(self, behavior_name: str, step: int) -> Tuple[str, List[str]]:
-        if not os.path.exists(self.model_path):
-            os.makedirs(self.model_path)
-        checkpoint_path = os.path.join(self.model_path, f"{behavior_name}-{step}")
-        state_dict = {
-            name: module.state_dict() for name, module in self.modules.items()
-        }
+    def save_checkpoint(self, behavior_name: str, step: int) -> tuple[str, list[str]]:
+        if not Path(self.model_path).exists():
+            Path(self.model_path).mkdir(parents=True)
+        checkpoint_path = Path(self.model_path) / f"{behavior_name}-{step}"
+        state_dict = {name: module.state_dict() for name, module in self.modules.items()}
         pytorch_ckpt_path = f"{checkpoint_path}.pt"
         export_ckpt_path = f"{checkpoint_path}.onnx"
         torch.save(state_dict, f"{checkpoint_path}.pt")
-        torch.save(state_dict, os.path.join(self.model_path, "checkpoint.pt"))
+        torch.save(state_dict, Path(self.model_path) / "checkpoint.pt")
         self.export(checkpoint_path, behavior_name)
         return export_ckpt_path, [pytorch_ckpt_path]
 
@@ -71,7 +70,9 @@ class TorchModelSaver(BaseModelSaver):
         if self.initialize_path is not None:
             logger.info(f"Initializing from {self.initialize_path}.")
             self._load_model(
-                self.initialize_path, policy, reset_global_steps=reset_steps
+                self.initialize_path,
+                policy,
+                reset_global_steps=reset_steps,
             )
         elif self.load:
             logger.info(f"Resuming from {self.model_path}.")
@@ -83,28 +84,29 @@ class TorchModelSaver(BaseModelSaver):
         policy: Optional[TorchPolicy] = None,
         reset_global_steps: bool = False,
     ) -> None:
-        model_path = os.path.join(load_path, "checkpoint.pt")
+        model_path = Path(load_path) / "checkpoint.pt"
         saved_state_dict = torch.load(model_path)
         if policy is None:
             modules = self.modules
             policy = self.policy
         else:
             modules = policy.get_modules()
-        policy = cast(TorchPolicy, policy)
+        policy = cast("TorchPolicy", policy)
 
         for name, mod in modules.items():
             try:
                 if isinstance(mod, torch.nn.Module):
                     missing_keys, unexpected_keys = mod.load_state_dict(
-                        saved_state_dict[name], strict=False
+                        saved_state_dict[name],
+                        strict=False,
                     )
                     if missing_keys:
                         logger.warning(
-                            f"Did not find these keys {missing_keys} in checkpoint. Initializing."
+                            f"Did not find these keys {missing_keys} in checkpoint. Initializing.",
                         )
                     if unexpected_keys:
                         logger.warning(
-                            f"Did not expect these keys {unexpected_keys} in checkpoint. Ignoring."
+                            f"Did not expect these keys {unexpected_keys} in checkpoint. Ignoring.",
                         )
                 else:
                     # If module is not an nn.Module, try to load as one piece
@@ -118,16 +120,14 @@ class TorchModelSaver(BaseModelSaver):
             # RuntimeError is raised by PyTorch if there is a size mismatch between modules
             # of the same name. This will still partially assign values to those layers that
             # have not changed shape.
-            except (KeyError, ValueError, RuntimeError) as err:
+            except (KeyError, ValueError, RuntimeError) as err:  # noqa: PERF203
                 logger.warning(f"Failed to load for module {name}. Initializing")
                 logger.debug(f"Module loading error : {err}")
 
         if reset_global_steps:
             policy.set_step(0)
             logger.info(
-                "Starting training from step 0 and saving to {}.".format(
-                    self.model_path
-                )
+                f"Starting training from step 0 and saving to {self.model_path}.",
             )
         else:
             logger.info(f"Resuming training from step {policy.get_current_step()}.")
@@ -137,7 +137,8 @@ class TorchModelSaver(BaseModelSaver):
         Copy the .nn file at the given source to the destination.
         Also copies the corresponding .onnx file if it exists.
         """
-        final_model_name = os.path.splitext(source_nn_path)[0]
+        source_path_ = Path(source_nn_path)
+        final_model_name = source_path_.parent / source_path_.stem
 
         if SerializationSettings.convert_to_onnx:
             try:

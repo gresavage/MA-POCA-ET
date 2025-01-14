@@ -1,36 +1,33 @@
 import sys
-from typing import Optional
 import uuid
-import mlagents_envs
-import mapoca.trainers
-from mapoca import torch_utils
-from mapoca.trainers.settings import RewardSignalType
-from mlagents_envs.exception import UnityCommunicationException
-from mlagents_envs.side_channel import SideChannel, IncomingMessage, OutgoingMessage
-from mlagents_envs.communicator_objects.training_analytics_pb2 import (
-    TrainingEnvironmentInitialized,
-    TrainingBehaviorInitialized,
-)
-from google.protobuf.any_pb2 import Any
 
-from mapoca.trainers.settings import TrainerSettings, RunOptions
+from typing import Optional
+
+import mlagents_envs
+
+from google.protobuf.any_pb2 import Any
+from mlagents_envs.communicator_objects.training_analytics_pb2 import TrainingBehaviorInitialized, TrainingEnvironmentInitialized
+from mlagents_envs.exception import UnityCommunicationException
+from mlagents_envs.side_channel import IncomingMessage, OutgoingMessage, SideChannel
+
+import mapoca.trainers
+
+from mapoca import torch_utils
+from mapoca.trainers.settings import RewardSignalType, RunOptions, TrainerSettings
 
 
 class TrainingAnalyticsSideChannel(SideChannel):
-    """
-    Side channel that sends information about the training to the Unity environment so it can be logged.
-    """
+    """Side channel that sends information about the training to the Unity environment so it can be logged."""
 
     def __init__(self) -> None:
         # >>> uuid.uuid5(uuid.NAMESPACE_URL, "com.unity.ml-agents/TrainingAnalyticsSideChannel")
-        # UUID('b664a4a9-d86f-5a5f-95cb-e8353a7e8356')
+        # UUID('b664a4a9-d86f-5a5f-95cb-e8353a7e8356')  # noqa: ERA001
         super().__init__(uuid.UUID("b664a4a9-d86f-5a5f-95cb-e8353a7e8356"))
         self.run_options: Optional[RunOptions] = None
 
-    def on_message_received(self, msg: IncomingMessage) -> None:
+    def on_message_received(self, msg: IncomingMessage) -> None:  # noqa: PLR6301
         raise UnityCommunicationException(
-            "The TrainingAnalyticsSideChannel received a message from Unity, "
-            + "this should not have happened."
+            "The TrainingAnalyticsSideChannel received a message from Unity, this should not have happened.",
         )
 
     def environment_initialized(self, run_options: RunOptions) -> None:
@@ -60,13 +57,9 @@ class TrainingAnalyticsSideChannel(SideChannel):
         msg = TrainingBehaviorInitialized(
             behavior_name=behavior_name,
             trainer_type=config.trainer_type.value,
-            extrinsic_reward_enabled=(
-                RewardSignalType.EXTRINSIC in config.reward_signals
-            ),
+            extrinsic_reward_enabled=(RewardSignalType.EXTRINSIC in config.reward_signals),
             gail_reward_enabled=(RewardSignalType.GAIL in config.reward_signals),
-            curiosity_reward_enabled=(
-                RewardSignalType.CURIOSITY in config.reward_signals
-            ),
+            curiosity_reward_enabled=(RewardSignalType.CURIOSITY in config.reward_signals),
             rnd_reward_enabled=(RewardSignalType.RND in config.reward_signals),
             behavioral_cloning_enabled=config.behavioral_cloning is not None,
             recurrent_enabled=config.network_settings.memory is not None,

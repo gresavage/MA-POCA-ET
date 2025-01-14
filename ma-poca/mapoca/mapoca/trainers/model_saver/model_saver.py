@@ -1,12 +1,13 @@
 # # Unity ML-Agents Toolkit
 import abc
-from typing import Any, Tuple, List
+
+from typing import Any
 
 
 class BaseModelSaver(abc.ABC):
-    """This class is the base class for the ModelSaver"""
+    """This class is the base class for the ModelSaver."""
 
-    def __init__(self):
+    def __init__(self):  # noqa: B027
         pass
 
     @abc.abstractmethod
@@ -15,35 +16,31 @@ class BaseModelSaver(abc.ABC):
         Register the modules to the ModelSaver.
         The ModelSaver will store the module and include it in the saved files
         when saving checkpoint/exporting graph.
-        :param module: the module to be registered
+        :param module: the module to be registered.
         """
-        pass
 
-    def _register_policy(self, policy):
+    def _register_policy(self, policy):  # noqa: B027
         """
         Helper function for registering policy to the ModelSaver.
-        :param policy: the policy to be registered
+        :param policy: the policy to be registered.
         """
-        pass
 
-    def _register_optimizer(self, optimizer):
+    def _register_optimizer(self, optimizer):  # noqa: B027
         """
         Helper function for registering optimizer to the ModelSaver.
-        :param optimizer: the optimizer to be registered
+        :param optimizer: the optimizer to be registered.
         """
-        pass
 
     @abc.abstractmethod
-    def save_checkpoint(self, behavior_name: str, step: int) -> Tuple[str, List[str]]:
+    def save_checkpoint(self, behavior_name: str, step: int) -> tuple[str, list[str]]:
         """
         Checkpoints the policy on disk.
         :param checkpoint_path: filepath to write the checkpoint
         :param behavior_name: Behavior name of bevavior to be trained
         :return: A Tuple of the path to the exported file, as well as a List of any
             auxillary files that were returned. For instance, an exported file would be Model.onnx,
-            and the auxillary files would be [Model.pt] for PyTorch
+            and the auxillary files would be [Model.pt] for PyTorch.
         """
-        pass
 
     @abc.abstractmethod
     def export(self, output_filepath: str, behavior_name: str) -> None:
@@ -55,7 +52,6 @@ class BaseModelSaver(abc.ABC):
         :param output_filepath: path (without suffix) for the model file(s)
         :param behavior_name: Behavior name of behavior to be trained.
         """
-        pass
 
     @abc.abstractmethod
     def initialize_or_load(self, policy):
@@ -64,6 +60,5 @@ class BaseModelSaver(abc.ABC):
         If given input argument policy, do with the input policy instead.
         This argument is mainly for the initialization of the ghost trainer's fixed policy.
         :param policy (optional): if given, perform the initializing/loading on this input policy.
-                                  Otherwise, do with the registered policy
+                                  Otherwise, do with the registered policy.
         """
-        pass

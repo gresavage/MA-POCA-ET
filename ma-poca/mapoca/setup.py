@@ -1,17 +1,17 @@
-import os
-import sys
+import os  # noqa: INP001
 
-from setuptools import setup, find_packages
-from setuptools.command.install import install
-from mapoca.plugins import ML_AGENTS_STATS_WRITER
 import mapoca.trainers
+
+from mapoca.plugins import ML_AGENTS_STATS_WRITER
+from setuptools import find_packages, setup
+
 VERSION = mapoca.trainers.__version__
 
-here = os.path.abspath(os.path.dirname(__file__))
+here = os.path.abspath(os.path.dirname(__file__))  # noqa: PTH100, PTH120
 
 
 # Get the long description from the README file
-with open(os.path.join(here, "README.md"), encoding="utf-8") as f:
+with open(os.path.join(here, "README.md"), encoding="utf-8") as f:  # noqa: PTH123, PTH118, FURB101
     long_description = f.read()
 
 setup(
@@ -20,7 +20,7 @@ setup(
     description="Unity Machine Learning Agents, MA-POCA",
     long_description=long_description,
     long_description_content_type="text/markdown",
-    url="https://https://github.com/Unity-Technologies/paper-ml-agents",
+    url="https://github.com/Unity-Technologies/paper-ml-agents",
     author="Unity Technologies",
     author_email="ML-Agents@unity3d.com",
     classifiers=[
@@ -38,7 +38,7 @@ setup(
         # Test-only dependencies should go in test_requirements.txt, not here.
         "grpcio>=1.11.0",
         "h5py>=2.9.0",
-        f"mlagents_envs==0.27.0",
+        "mlagents_envs==0.27.0",
         "numpy>=1.13.3,<2.0",
         "Pillow>=4.2.1",
         "protobuf>=3.6",
@@ -69,7 +69,7 @@ setup(
         ],
         # Plugins - each plugin type should have an entry here for the default behavior
         ML_AGENTS_STATS_WRITER: [
-            "default=mapoca.plugins.stats_writer:get_default_stats_writers"
+            "default=mapoca.plugins.stats_writer:get_default_stats_writers",
         ],
     },
 )

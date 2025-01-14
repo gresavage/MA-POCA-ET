@@ -1,8 +1,10 @@
-from typing import NamedTuple, Any, Dict, List
+from typing import Any, NamedTuple
+
 import numpy as np
+
 from mlagents_envs.base_env import AgentId
 
-ActionInfoOutputs = Dict[str, np.ndarray]
+ActionInfoOutputs = dict[str, np.ndarray]
 
 
 class ActionInfo(NamedTuple):
@@ -12,13 +14,13 @@ class ActionInfo(NamedTuple):
     :param action: The action output of the policy
     :param env_action: The possibly clipped action to be executed in the environment
     :param outputs: Dict of all quantities associated with the policy forward pass
-    :param agent_ids: List of int agent ids in DecisionStep
+    :param agent_ids: List of int agent ids in DecisionStep.
     """
 
     action: Any
     env_action: Any
     outputs: ActionInfoOutputs
-    agent_ids: List[AgentId]
+    agent_ids: list[AgentId]
 
     @staticmethod
     def empty() -> "ActionInfo":

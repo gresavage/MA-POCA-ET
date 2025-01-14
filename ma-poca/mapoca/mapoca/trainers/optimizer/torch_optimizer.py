@@ -1,21 +1,17 @@
-from typing import Dict, Optional, Tuple, List
-from mapoca.torch_utils import torch
-import numpy as np
 from collections import defaultdict
+from typing import Optional
 
+import numpy as np
+
+from mapoca.torch_utils import torch
 from mapoca.trainers.buffer import AgentBuffer, AgentBufferField
-from mapoca.trainers.trajectory import ObsUtil
+from mapoca.trainers.optimizer import Optimizer
+from mapoca.trainers.policy.torch_policy import TorchPolicy
+from mapoca.trainers.settings import RewardSignalSettings, RewardSignalType, TrainerSettings
 from mapoca.trainers.torch.components.bc.module import BCModule
 from mapoca.trainers.torch.components.reward_providers import create_reward_provider
-
-from mapoca.trainers.policy.torch_policy import TorchPolicy
-from mapoca.trainers.optimizer import Optimizer
-from mapoca.trainers.settings import (
-    TrainerSettings,
-    RewardSignalSettings,
-    RewardSignalType,
-)
 from mapoca.trainers.torch.utils import ModelUtils
+from mapoca.trainers.trajectory import ObsUtil
 
 
 class TorchOptimizer(Optimizer):
@@ -23,15 +19,15 @@ class TorchOptimizer(Optimizer):
         super().__init__()
         self.policy = policy
         self.trainer_settings = trainer_settings
-        self.update_dict: Dict[str, torch.Tensor] = {}
-        self.value_heads: Dict[str, torch.Tensor] = {}
+        self.update_dict: dict[str, torch.Tensor] = {}
+        self.value_heads: dict[str, torch.Tensor] = {}
         self.memory_in: torch.Tensor = None
         self.memory_out: torch.Tensor = None
         self.m_size: int = 0
         self.global_step = torch.tensor(0)
         self.bc_module: Optional[BCModule] = None
         self.create_reward_signals(trainer_settings.reward_signals)
-        self.critic_memory_dict: Dict[str, torch.Tensor] = {}
+        self.critic_memory_dict: dict[str, torch.Tensor] = {}
         if trainer_settings.behavioral_cloning is not None:
             self.bc_module = BCModule(
                 self.policy,
@@ -45,11 +41,11 @@ class TorchOptimizer(Optimizer):
     def critic(self):
         raise NotImplementedError
 
-    def update(self, batch: AgentBuffer, num_sequences: int) -> Dict[str, float]:
+    def update(self, batch: AgentBuffer, num_sequences: int) -> dict[str, float]:
         pass
 
     def create_reward_signals(
-        self, reward_signal_configs: Dict[RewardSignalType, RewardSignalSettings]
+        self, reward_signal_configs: dict[RewardSignalType, RewardSignalSettings],
     ) -> None:
         """
         Create reward signals
@@ -58,12 +54,12 @@ class TorchOptimizer(Optimizer):
         for reward_signal, settings in reward_signal_configs.items():
             # Name reward signals by string in case we have duplicates later
             self.reward_signals[reward_signal.value] = create_reward_provider(
-                reward_signal, self.policy.behavior_spec, settings
+                reward_signal, self.policy.behavior_spec, settings,
             )
 
     def _evaluate_by_sequence(
-        self, tensor_obs: List[torch.Tensor], initial_memory: torch.Tensor
-    ) -> Tuple[Dict[str, torch.Tensor], AgentBufferField, torch.Tensor]:
+        self, tensor_obs: list[torch.Tensor], initial_memory: torch.Tensor,
+    ) -> tuple[dict[str, torch.Tensor], AgentBufferField, torch.Tensor]:
         """
         Evaluate a trajectory sequence-by-sequence, assembling the result. This enables us to get the
         intermediate memories for the critic.
@@ -83,21 +79,19 @@ class TorchOptimizer(Optimizer):
         # Compute the number of elements in this sequence that will end up being padded.
         leftover_seq_len = num_experiences % self.policy.sequence_length
 
-        all_values: Dict[str, List[np.ndarray]] = defaultdict(list)
-        _mem = initial_memory
+        all_values: dict[str, list[np.ndarray]] = defaultdict(list)
+        mem = initial_memory
         # Evaluate other trajectories, carrying over _mem after each
         # trajectory
         for seq_num in range(num_experiences // self.policy.sequence_length):
-            seq_obs = []
             for _ in range(self.policy.sequence_length):
-                all_next_memories.append(ModelUtils.to_numpy(_mem.squeeze()))
+                all_next_memories.append(ModelUtils.to_numpy(mem.squeeze()))
             start = seq_num * self.policy.sequence_length
             end = (seq_num + 1) * self.policy.sequence_length
 
-            for _obs in tensor_obs:
-                seq_obs.append(_obs[start:end])
-            values, _mem = self.critic.critic_pass(
-                seq_obs, _mem, sequence_length=self.policy.sequence_length
+            seq_obs = [_obs[start:end] for _obs in tensor_obs]
+            values, mem = self.critic.critic_pass(
+                seq_obs, mem, sequence_length=self.policy.sequence_length,
             )
             for signal_name, _val in values.items():
                 all_values[signal_name].append(_val)
@@ -114,10 +108,10 @@ class TorchOptimizer(Optimizer):
             # For the last sequence, the initial memory should be the one at the
             # end of this trajectory.
             for _ in range(leftover_seq_len):
-                all_next_memories.append(ModelUtils.to_numpy(_mem.squeeze()))
+                all_next_memories.append(ModelUtils.to_numpy(mem.squeeze()))
 
-            last_values, _mem = self.critic.critic_pass(
-                seq_obs, _mem, sequence_length=leftover_seq_len
+            last_values, mem = self.critic.critic_pass(
+                seq_obs, mem, sequence_length=leftover_seq_len,
             )
             for signal_name, _val in last_values.items():
                 all_values[signal_name].append(_val)
@@ -127,16 +121,16 @@ class TorchOptimizer(Optimizer):
             signal_name: torch.cat(value_list, dim=0)
             for signal_name, value_list in all_values.items()
         }
-        next_mem = _mem
+        next_mem = mem
         return all_value_tensors, all_next_memories, next_mem
 
     def get_trajectory_value_estimates(
         self,
         batch: AgentBuffer,
-        next_obs: List[np.ndarray],
+        next_obs: list[np.ndarray],
         done: bool,
         agent_id: str = "",
-    ) -> Tuple[Dict[str, np.ndarray], Dict[str, float], Optional[AgentBufferField]]:
+    ) -> tuple[dict[str, np.ndarray], dict[str, float], Optional[AgentBufferField]]:
         """
         Get value estimates and memories for a trajectory, in batch form.
         :param batch: An AgentBuffer that consists of a trajectory.
@@ -180,14 +174,14 @@ class TorchOptimizer(Optimizer):
                 ) = self._evaluate_by_sequence(current_obs, memory)
             else:
                 value_estimates, next_memory = self.critic.critic_pass(
-                    current_obs, memory, sequence_length=batch.num_experiences
+                    current_obs, memory, sequence_length=batch.num_experiences,
                 )
 
         # Store the memory for the next trajectory. This should NOT have a gradient.
         self.critic_memory_dict[agent_id] = next_memory
 
         next_value_estimate, _ = self.critic.critic_pass(
-            next_obs, next_memory, sequence_length=1
+            next_obs, next_memory, sequence_length=1,
         )
 
         for name, estimate in value_estimates.items():

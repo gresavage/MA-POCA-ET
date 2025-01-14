@@ -1,8 +1,7 @@
-from typing import Tuple, Optional, Union
+from typing import Optional, Union
 
-from mapoca.trainers.torch.layers import linear_layer, Initialization, Swish
-
-from mapoca.torch_utils import torch, nn
+from mapoca.torch_utils import nn, torch
+from mapoca.trainers.torch.layers import Initialization, Swish, linear_layer
 from mapoca.trainers.torch.model_serialization import exporting_to_onnx
 
 
@@ -14,13 +13,11 @@ class Normalizer(nn.Module):
         self.register_buffer("running_variance", torch.ones(vec_obs_size))
 
     def forward(self, inputs: torch.Tensor) -> torch.Tensor:
-        normalized_state = torch.clamp(
-            (inputs - self.running_mean)
-            / torch.sqrt(self.running_variance / self.normalization_steps),
+        return torch.clamp(
+            (inputs - self.running_mean) / torch.sqrt(self.running_variance / self.normalization_steps),
             -5,
             5,
         )
-        return normalized_state
 
     def update(self, vector_input: torch.Tensor) -> None:
         with torch.no_grad():
@@ -28,14 +25,10 @@ class Normalizer(nn.Module):
             total_new_steps = self.normalization_steps + steps_increment
 
             input_to_old_mean = vector_input - self.running_mean
-            new_mean: torch.Tensor = self.running_mean + (
-                input_to_old_mean / total_new_steps
-            ).sum(0)
+            new_mean: torch.Tensor = self.running_mean + (input_to_old_mean / total_new_steps).sum(0)
 
             input_to_new_mean = vector_input - new_mean
-            new_variance = self.running_variance + (
-                input_to_new_mean * input_to_old_mean
-            ).sum(0)
+            new_variance = self.running_variance + (input_to_new_mean * input_to_old_mean).sum(0)
             # Update references. This is much faster than in-place data update.
             self.running_mean: torch.Tensor = new_mean
             self.running_variance: torch.Tensor = new_variance
@@ -48,12 +41,12 @@ class Normalizer(nn.Module):
 
 
 def conv_output_shape(
-    h_w: Tuple[int, int],
-    kernel_size: Union[int, Tuple[int, int]] = 1,
+    h_w: tuple[int, int],
+    kernel_size: Union[int, tuple[int, int]] = 1,
     stride: int = 1,
     padding: int = 0,
     dilation: int = 1,
-) -> Tuple[int, int]:
+) -> tuple[int, int]:
     """
     Calculates the output shape (height and width) of the output of a convolution layer.
     kernel_size, stride, padding and dilation correspond to the inputs of the
@@ -63,27 +56,27 @@ def conv_output_shape(
     tuple [width, height])
     :param stride: The stride of the convolution
     :param padding: The padding of the convolution
-    :param dilation: The dilation of the convolution
+    :param dilation: The dilation of the convolution.
     """
-    from math import floor
+    from math import floor  # noqa: PLC0415
 
     if not isinstance(kernel_size, tuple):
         kernel_size = (int(kernel_size), int(kernel_size))
     h = floor(
-        ((h_w[0] + (2 * padding) - (dilation * (kernel_size[0] - 1)) - 1) / stride) + 1
+        ((h_w[0] + (2 * padding) - (dilation * (kernel_size[0] - 1)) - 1) / stride) + 1,
     )
     w = floor(
-        ((h_w[1] + (2 * padding) - (dilation * (kernel_size[1] - 1)) - 1) / stride) + 1
+        ((h_w[1] + (2 * padding) - (dilation * (kernel_size[1] - 1)) - 1) / stride) + 1,
     )
     return h, w
 
 
-def pool_out_shape(h_w: Tuple[int, int], kernel_size: int) -> Tuple[int, int]:
+def pool_out_shape(h_w: tuple[int, int], kernel_size: int) -> tuple[int, int]:
     """
     Calculates the output shape (height and width) of the output of a max pooling layer.
     kernel_size corresponds to the inputs of the
     torch.nn.MaxPool2d layer (https://pytorch.org/docs/stable/generated/torch.nn.MaxPool2d.html)
-    :param kernel_size: The size of the kernel of the convolution
+    :param kernel_size: The size of the kernel of the convolution.
     """
     height = (h_w[0] - kernel_size) // 2 + 1
     width = (h_w[1] - kernel_size) // 2 + 1
@@ -113,7 +106,11 @@ class VectorInput(nn.Module):
 
 class FullyConnectedVisualEncoder(nn.Module):
     def __init__(
-        self, height: int, width: int, initial_channels: int, output_size: int
+        self,
+        height: int,
+        width: int,
+        initial_channels: int,
+        output_size: int,
     ):
         super().__init__()
         self.output_size = output_size
@@ -138,11 +135,15 @@ class FullyConnectedVisualEncoder(nn.Module):
 class SmallVisualEncoder(nn.Module):
     """
     CNN architecture used by King in their Candy Crush predictor
-    https://www.researchgate.net/publication/328307928_Human-Like_Playtesting_with_Deep_Learning
+    https://www.researchgate.net/publication/328307928_Human-Like_Playtesting_with_Deep_Learning.
     """
 
     def __init__(
-        self, height: int, width: int, initial_channels: int, output_size: int
+        self,
+        height: int,
+        width: int,
+        initial_channels: int,
+        output_size: int,
     ):
         super().__init__()
         self.h_size = output_size
@@ -176,7 +177,11 @@ class SmallVisualEncoder(nn.Module):
 
 class SimpleVisualEncoder(nn.Module):
     def __init__(
-        self, height: int, width: int, initial_channels: int, output_size: int
+        self,
+        height: int,
+        width: int,
+        initial_channels: int,
+        output_size: int,
     ):
         super().__init__()
         self.h_size = output_size
@@ -210,7 +215,11 @@ class SimpleVisualEncoder(nn.Module):
 
 class NatureVisualEncoder(nn.Module):
     def __init__(
-        self, height: int, width: int, initial_channels: int, output_size: int
+        self,
+        height: int,
+        width: int,
+        initial_channels: int,
+        output_size: int,
     ):
         super().__init__()
         self.h_size = output_size
@@ -250,7 +259,7 @@ class ResNetBlock(nn.Module):
         """
         Creates a ResNet Block.
         :param channel: The number of channels in the input (and output) tensors of the
-        convolutions
+        convolutions.
         """
         super().__init__()
         self.layers = nn.Sequential(
@@ -266,19 +275,21 @@ class ResNetBlock(nn.Module):
 
 class ResNetVisualEncoder(nn.Module):
     def __init__(
-        self, height: int, width: int, initial_channels: int, output_size: int
+        self,
+        height: int,
+        width: int,
+        initial_channels: int,
+        output_size: int,
     ):
         super().__init__()
         n_channels = [16, 32, 32]  # channel for each stack
         n_blocks = 2  # number of residual blocks
         layers = []
         last_channel = initial_channels
-        for _, channel in enumerate(n_channels):
-            layers.append(nn.Conv2d(last_channel, channel, [3, 3], [1, 1], padding=1))
-            layers.append(nn.MaxPool2d([3, 3], [2, 2]))
+        for channel in n_channels:
+            layers.extend((nn.Conv2d(last_channel, channel, [3, 3], [1, 1], padding=1), nn.MaxPool2d([3, 3], [2, 2])))
             height, width = pool_out_shape((height, width), 3)
-            for _ in range(n_blocks):
-                layers.append(ResNetBlock(channel))
+            layers.extend(ResNetBlock(channel) for _ in range(n_blocks))
             last_channel = channel
         layers.append(Swish())
         self.final_flat_size = n_channels[-1] * height * width

@@ -1,22 +1,19 @@
 from abc import abstractmethod
-from typing import Dict, List, Optional
+from typing import Optional
+
 import numpy as np
 
 from mlagents_envs.base_env import ActionTuple, BehaviorSpec, DecisionSteps
 from mlagents_envs.exception import UnityException
 
 from mapoca.trainers.action_info import ActionInfo
-from mapoca.trainers.settings import TrainerSettings, NetworkSettings
-from mapoca.trainers.buffer import AgentBuffer
 from mapoca.trainers.behavior_id_utils import GlobalAgentId
+from mapoca.trainers.buffer import AgentBuffer
+from mapoca.trainers.settings import NetworkSettings, TrainerSettings
 
 
 class UnityPolicyException(UnityException):
-    """
-    Related to errors with the Trainer.
-    """
-
-    pass
+    """Related to errors with the Trainer."""
 
 
 class Policy:
@@ -32,15 +29,14 @@ class Policy:
         self.trainer_settings = trainer_settings
         self.network_settings: NetworkSettings = trainer_settings.network_settings
         self.seed = seed
-        self.previous_action_dict: Dict[str, np.ndarray] = {}
-        self.previous_memory_dict: Dict[str, np.ndarray] = {}
-        self.memory_dict: Dict[str, np.ndarray] = {}
+        self.previous_action_dict: dict[str, np.ndarray] = {}
+        self.previous_memory_dict: dict[str, np.ndarray] = {}
+        self.memory_dict: dict[str, np.ndarray] = {}
         self.normalize = trainer_settings.network_settings.normalize
         self.use_recurrent = self.network_settings.memory is not None
         self.h_size = self.network_settings.hidden_units
         num_layers = self.network_settings.num_layers
-        if num_layers < 1:
-            num_layers = 1
+        num_layers = max(num_layers, 1)
         self.num_layers = num_layers
 
         self.vis_encode_type = self.network_settings.vis_encode_type
@@ -67,7 +63,7 @@ class Policy:
         return np.zeros((num_agents, self.m_size), dtype=np.float32)
 
     def save_memories(
-        self, agent_ids: List[GlobalAgentId], memory_matrix: Optional[np.ndarray]
+        self, agent_ids: list[GlobalAgentId], memory_matrix: Optional[np.ndarray],
     ) -> None:
         if memory_matrix is None:
             return
@@ -80,21 +76,21 @@ class Policy:
         for index, agent_id in enumerate(agent_ids):
             self.memory_dict[agent_id] = memory_matrix[index, :]
 
-    def retrieve_memories(self, agent_ids: List[GlobalAgentId]) -> np.ndarray:
+    def retrieve_memories(self, agent_ids: list[GlobalAgentId]) -> np.ndarray:
         memory_matrix = np.zeros((len(agent_ids), self.m_size), dtype=np.float32)
         for index, agent_id in enumerate(agent_ids):
             if agent_id in self.memory_dict:
                 memory_matrix[index, :] = self.memory_dict[agent_id]
         return memory_matrix
 
-    def retrieve_previous_memories(self, agent_ids: List[GlobalAgentId]) -> np.ndarray:
+    def retrieve_previous_memories(self, agent_ids: list[GlobalAgentId]) -> np.ndarray:
         memory_matrix = np.zeros((len(agent_ids), self.m_size), dtype=np.float32)
         for index, agent_id in enumerate(agent_ids):
             if agent_id in self.previous_memory_dict:
                 memory_matrix[index, :] = self.previous_memory_dict[agent_id]
         return memory_matrix
 
-    def remove_memories(self, agent_ids: List[GlobalAgentId]) -> None:
+    def remove_memories(self, agent_ids: list[GlobalAgentId]) -> None:
         for agent_id in agent_ids:
             if agent_id in self.memory_dict:
                 self.memory_dict.pop(agent_id)
@@ -108,29 +104,29 @@ class Policy:
         :return: Numpy array of zeros.
         """
         return np.zeros(
-            (num_agents, self.behavior_spec.action_spec.discrete_size), dtype=np.int32
+            (num_agents, self.behavior_spec.action_spec.discrete_size), dtype=np.int32,
         )
 
     def save_previous_action(
-        self, agent_ids: List[GlobalAgentId], action_tuple: ActionTuple
+        self, agent_ids: list[GlobalAgentId], action_tuple: ActionTuple,
     ) -> None:
         for index, agent_id in enumerate(agent_ids):
             self.previous_action_dict[agent_id] = action_tuple.discrete[index, :]
 
-    def retrieve_previous_action(self, agent_ids: List[GlobalAgentId]) -> np.ndarray:
+    def retrieve_previous_action(self, agent_ids: list[GlobalAgentId]) -> np.ndarray:
         action_matrix = self.make_empty_previous_action(len(agent_ids))
         for index, agent_id in enumerate(agent_ids):
             if agent_id in self.previous_action_dict:
                 action_matrix[index, :] = self.previous_action_dict[agent_id]
         return action_matrix
 
-    def remove_previous_action(self, agent_ids: List[GlobalAgentId]) -> None:
+    def remove_previous_action(self, agent_ids: list[GlobalAgentId]) -> None:
         for agent_id in agent_ids:
             if agent_id in self.previous_action_dict:
                 self.previous_action_dict.pop(agent_id)
 
     def get_action(
-        self, decision_requests: DecisionSteps, worker_id: int = 0
+        self, decision_requests: DecisionSteps, worker_id: int = 0,
     ) -> ActionInfo:
         raise NotImplementedError
 
@@ -157,11 +153,11 @@ class Policy:
         pass
 
     @abstractmethod
-    def load_weights(self, values: List[np.ndarray]) -> None:
+    def load_weights(self, values: list[np.ndarray]) -> None:
         pass
 
     @abstractmethod
-    def get_weights(self) -> List[np.ndarray]:
+    def get_weights(self) -> list[np.ndarray]:
         return []
 
     @abstractmethod

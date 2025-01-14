@@ -1,31 +1,29 @@
-from typing import Callable, List, Dict, Tuple, Optional, Union
 import abc
 
-from mapoca.torch_utils import torch, nn
+from collections.abc import Callable
+from typing import Optional, Union
 
 from mlagents_envs.base_env import ActionSpec, ObservationSpec, ObservationType
+
+from mapoca.torch_utils import nn, torch
+from mapoca.trainers.buffer import AgentBuffer
+from mapoca.trainers.exception import UnityTrainerException
+from mapoca.trainers.settings import ConditioningType, EncoderType, NetworkSettings
+from mapoca.trainers.torch.action_log_probs import ActionLogProbs
 from mapoca.trainers.torch.action_model import ActionModel
 from mapoca.trainers.torch.agent_action import AgentAction
-from mapoca.trainers.torch.action_log_probs import ActionLogProbs
-from mapoca.trainers.settings import NetworkSettings, EncoderType, ConditioningType
-from mapoca.trainers.torch.utils import ModelUtils
-from mapoca.trainers.torch.decoders import ValueHeads
-from mapoca.trainers.torch.layers import LSTM, LinearEncoder
-from mapoca.trainers.torch.encoders import VectorInput
-from mapoca.trainers.buffer import AgentBuffer
-from mapoca.trainers.trajectory import ObsUtil
+from mapoca.trainers.torch.attention import EntityEmbedding, ResidualSelfAttention, get_zero_entities_mask
 from mapoca.trainers.torch.conditioning import ConditionalEncoder
-from mapoca.trainers.torch.attention import (
-    EntityEmbedding,
-    ResidualSelfAttention,
-    get_zero_entities_mask,
-)
-from mapoca.trainers.exception import UnityTrainerException
-
+from mapoca.trainers.torch.decoders import ValueHeads
+from mapoca.trainers.torch.encoders import VectorInput
+from mapoca.trainers.torch.layers import LSTM, Initialization, LinearEncoder
+from mapoca.trainers.torch.utils import ModelUtils
+from mapoca.trainers.trajectory import ObsUtil
 
 ActivationFunction = Callable[[torch.Tensor], torch.Tensor]
 EncoderFunction = Callable[
-    [torch.Tensor, int, ActivationFunction, int, str, bool], torch.Tensor
+    [torch.Tensor, int, ActivationFunction, int, str, bool],
+    torch.Tensor,
 ]
 
 EPSILON = 1e-7
@@ -36,7 +34,7 @@ class ObservationEncoder(nn.Module):
 
     def __init__(
         self,
-        observation_specs: List[ObservationSpec],
+        observation_specs: list[ObservationSpec],
         h_size: int,
         vis_encode_type: EncoderType,
         normalize: bool = False,
@@ -54,17 +52,16 @@ class ObservationEncoder(nn.Module):
             normalize=normalize,
         )
         self.rsa, self.x_self_encoder = ModelUtils.create_residual_self_attention(
-            self.processors, self.embedding_sizes, self.ATTENTION_EMBEDDING_SIZE
+            self.processors,
+            self.embedding_sizes,
+            self.ATTENTION_EMBEDDING_SIZE,
         )
-        if self.rsa is not None:
-            total_enc_size = sum(self.embedding_sizes) + self.ATTENTION_EMBEDDING_SIZE
-        else:
-            total_enc_size = sum(self.embedding_sizes)
+        total_enc_size = sum(self.embedding_sizes) + self.ATTENTION_EMBEDDING_SIZE if self.rsa is not None else sum(self.embedding_sizes)
         self.normalize = normalize
         self._total_enc_size = total_enc_size
 
         self._total_goal_enc_size = 0
-        self._goal_processor_indices: List[int] = []
+        self._goal_processor_indices: list[int] = []
         for i in range(len(observation_specs)):
             if observation_specs[i].observation_type == ObservationType.GOAL_SIGNAL:
                 self._total_goal_enc_size += self.embedding_sizes[i]
@@ -72,37 +69,33 @@ class ObservationEncoder(nn.Module):
 
     @property
     def total_enc_size(self) -> int:
-        """
-        Returns the total encoding size for this ObservationEncoder.
-        """
+        """Returns the total encoding size for this ObservationEncoder."""
         return self._total_enc_size
 
     @property
     def total_goal_enc_size(self) -> int:
-        """
-        Returns the total goal encoding size for this ObservationEncoder.
-        """
+        """Returns the total goal encoding size for this ObservationEncoder."""
         return self._total_goal_enc_size
 
     def update_normalization(self, buffer: AgentBuffer) -> None:
         obs = ObsUtil.from_buffer(buffer, len(self.processors))
-        for vec_input, enc in zip(obs, self.processors):
+        for vec_input, enc in zip(obs, self.processors, strict=False):
             if isinstance(enc, VectorInput):
                 enc.update_normalization(torch.as_tensor(vec_input))
 
     def copy_normalization(self, other_encoder: "ObservationEncoder") -> None:
         if self.normalize:
-            for n1, n2 in zip(self.processors, other_encoder.processors):
+            for n1, n2 in zip(self.processors, other_encoder.processors, strict=False):
                 if isinstance(n1, VectorInput) and isinstance(n2, VectorInput):
                     n1.copy_normalization(n2)
 
-    def forward(self, inputs: List[torch.Tensor]) -> torch.Tensor:
+    def forward(self, inputs: list[torch.Tensor]) -> torch.Tensor:
         """
         Encode observations using a list of processors and an RSA.
         :param inputs: List of Tensors corresponding to a set of obs.
         """
         encodes = []
-        var_len_processor_inputs: List[Tuple[nn.Module, torch.Tensor]] = []
+        var_len_processor_inputs: list[tuple[nn.Module, torch.Tensor]] = []
 
         for idx, processor in enumerate(self.processors):
             if not isinstance(processor, EntityEmbedding):
@@ -120,12 +113,8 @@ class ObservationEncoder(nn.Module):
         if len(var_len_processor_inputs) > 0 and self.rsa is not None:
             # Some inputs need to be processed with a variable length encoder
             masks = get_zero_entities_mask([p_i[1] for p_i in var_len_processor_inputs])
-            embeddings: List[torch.Tensor] = []
-            processed_self = (
-                self.x_self_encoder(encoded_self)
-                if input_exist and self.x_self_encoder is not None
-                else None
-            )
+            embeddings: list[torch.Tensor] = []
+            processed_self = self.x_self_encoder(encoded_self) if input_exist and self.x_self_encoder is not None else None
             for processor, var_len_input in var_len_processor_inputs:
                 embeddings.append(processor(processed_self, var_len_input))
             qkv = torch.cat(embeddings, dim=1)
@@ -139,12 +128,12 @@ class ObservationEncoder(nn.Module):
         if not input_exist:
             raise UnityTrainerException(
                 "The trainer was unable to process any of the provided inputs. "
-                "Make sure the trained agents has at least one sensor attached to them."
+                "Make sure the trained agents has at least one sensor attached to them.",
             )
 
         return encoded_self
 
-    def get_goal_encoding(self, inputs: List[torch.Tensor]) -> torch.Tensor:
+    def get_goal_encoding(self, inputs: list[torch.Tensor]) -> torch.Tensor:
         """
         Encode observations corresponding to goals using a list of processors.
         :param inputs: List of Tensors corresponding to a set of obs.
@@ -159,14 +148,13 @@ class ObservationEncoder(nn.Module):
                 encodes.append(processed_obs)
             else:
                 raise UnityTrainerException(
-                    "The one of the goals uses variable length observations. This use "
-                    "case is not supported."
+                    "The one of the goals uses variable length observations. This use case is not supported.",
                 )
         if len(encodes) != 0:
             encoded = torch.cat(encodes, dim=1)
         else:
             raise UnityTrainerException(
-                "Trainer was unable to process any of the goals provided as input."
+                "Trainer was unable to process any of the goals provided as input.",
             )
         return encoded
 
@@ -174,7 +162,7 @@ class ObservationEncoder(nn.Module):
 class NetworkBody(nn.Module):
     def __init__(
         self,
-        observation_specs: List[ObservationSpec],
+        observation_specs: list[ObservationSpec],
         network_settings: NetworkSettings,
         encoded_act_size: int = 0,
     ):
@@ -182,11 +170,7 @@ class NetworkBody(nn.Module):
         self.normalize = network_settings.normalize
         self.use_lstm = network_settings.memory is not None
         self.h_size = network_settings.hidden_units
-        self.m_size = (
-            network_settings.memory.memory_size
-            if network_settings.memory is not None
-            else 0
-        )
+        self.m_size = network_settings.memory.memory_size if network_settings.memory is not None else 0
         self.observation_encoder = ObservationEncoder(
             observation_specs,
             self.h_size,
@@ -197,11 +181,8 @@ class NetworkBody(nn.Module):
         total_enc_size = self.observation_encoder.total_enc_size
         total_enc_size += encoded_act_size
 
-        if (
-            self.observation_encoder.total_goal_enc_size > 0
-            and network_settings.goal_conditioning_type == ConditioningType.HYPER
-        ):
-            self._body_endoder = ConditionalEncoder(
+        if self.observation_encoder.total_goal_enc_size > 0 and network_settings.goal_conditioning_type == ConditioningType.HYPER:
+            self._body_encoder = ConditionalEncoder(
                 total_enc_size,
                 self.observation_encoder.total_goal_enc_size,
                 self.h_size,
@@ -209,14 +190,16 @@ class NetworkBody(nn.Module):
                 1,
             )
         else:
-            self._body_endoder = LinearEncoder(
-                total_enc_size, network_settings.num_layers, self.h_size
+            self._body_encoder = LinearEncoder(
+                total_enc_size,
+                network_settings.num_layers,
+                self.h_size,
             )
 
         if self.use_lstm:
-            self.lstm = LSTM(self.h_size, self.m_size)
+            self.lstm: LSTM | None = LSTM(self.h_size, self.m_size)
         else:
-            self.lstm = None  # type: ignore
+            self.lstm = None
 
     def update_normalization(self, buffer: AgentBuffer) -> None:
         self.observation_encoder.update_normalization(buffer)
@@ -230,19 +213,19 @@ class NetworkBody(nn.Module):
 
     def forward(
         self,
-        inputs: List[torch.Tensor],
+        inputs: list[torch.Tensor],
         actions: Optional[torch.Tensor] = None,
         memories: Optional[torch.Tensor] = None,
         sequence_length: int = 1,
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
+    ) -> tuple[torch.Tensor, torch.Tensor]:
         encoded_self = self.observation_encoder(inputs)
         if actions is not None:
             encoded_self = torch.cat([encoded_self, actions], dim=1)
-        if isinstance(self._body_endoder, ConditionalEncoder):
+        if isinstance(self._body_encoder, ConditionalEncoder):
             goal = self.observation_encoder.get_goal_encoding(inputs)
-            encoding = self._body_endoder(encoded_self, goal)
+            encoding = self._body_encoder(encoded_self, goal)
         else:
-            encoding = self._body_endoder(encoded_self)
+            encoding = self._body_encoder(encoded_self)
 
         if self.use_lstm:
             # Resize to (batch, sequence length, encoding size)
@@ -261,7 +244,7 @@ class MultiAgentNetworkBody(torch.nn.Module):
 
     def __init__(
         self,
-        observation_specs: List[ObservationSpec],
+        observation_specs: list[ObservationSpec],
         network_settings: NetworkSettings,
         action_spec: ActionSpec,
     ):
@@ -269,11 +252,7 @@ class MultiAgentNetworkBody(torch.nn.Module):
         self.normalize = network_settings.normalize
         self.use_lstm = network_settings.memory is not None
         self.h_size = network_settings.hidden_units
-        self.m_size = (
-            network_settings.memory.memory_size
-            if network_settings.memory is not None
-            else 0
-        )
+        self.m_size = network_settings.memory.memory_size if network_settings.memory is not None else 0
         self.action_spec = action_spec
         self.observation_encoder = ObservationEncoder(
             observation_specs,
@@ -285,18 +264,18 @@ class MultiAgentNetworkBody(torch.nn.Module):
 
         # Modules for multi-agent self-attention
         obs_only_ent_size = self.observation_encoder.total_enc_size
-        q_ent_size = (
-            obs_only_ent_size
-            + sum(self.action_spec.discrete_branches)
-            + self.action_spec.continuous_size
-        )
+        q_ent_size = obs_only_ent_size + sum(self.action_spec.discrete_branches) + self.action_spec.continuous_size
 
         attention_embeding_size = self.h_size
         self.obs_encoder = EntityEmbedding(
-            obs_only_ent_size, None, attention_embeding_size
+            obs_only_ent_size,
+            None,
+            attention_embeding_size,
         )
         self.obs_action_encoder = EntityEmbedding(
-            q_ent_size, None, attention_embeding_size
+            q_ent_size,
+            None,
+            attention_embeding_size,
         )
 
         self.self_attn = ResidualSelfAttention(attention_embeding_size)
@@ -305,15 +284,18 @@ class MultiAgentNetworkBody(torch.nn.Module):
             attention_embeding_size,
             network_settings.num_layers,
             self.h_size,
-            kernel_gain=(0.125 / self.h_size) ** 0.5,
+            # kernel_gain=(0.125 / self.h_size) ** 0.5,
+            kernel_init=Initialization.XavierGlorotNormal,
+            kernel_gain=0.67,
         )
 
         if self.use_lstm:
-            self.lstm = LSTM(self.h_size, self.m_size)
+            self.lstm: LSTM | None = LSTM(self.h_size, self.m_size)
         else:
-            self.lstm = None  # type: ignore
+            self.lstm = None
         self._current_max_agents = torch.nn.Parameter(
-            torch.as_tensor(1), requires_grad=False
+            torch.as_tensor(1),
+            requires_grad=False,
         )
 
     @property
@@ -326,27 +308,27 @@ class MultiAgentNetworkBody(torch.nn.Module):
     def copy_normalization(self, other_network: "MultiAgentNetworkBody") -> None:
         self.observation_encoder.copy_normalization(other_network.observation_encoder)
 
-    def _get_masks_from_nans(self, obs_tensors: List[torch.Tensor]) -> torch.Tensor:
+    def _get_masks_from_nans(self, obs_tensors: list[torch.Tensor]) -> torch.Tensor:  # noqa: PLR6301
         """
         Get attention masks by grabbing an arbitrary obs across all the agents
-        Since these are raw obs, the padded values are still NaN
+        Since these are raw obs, the padded values are still NaN.
         """
         only_first_obs = [_all_obs[0] for _all_obs in obs_tensors]
         # Just get the first element in each obs regardless of its dimension. This will speed up
         # searching for NaNs.
         only_first_obs_flat = torch.stack(
-            [_obs.flatten(start_dim=1)[:, 0] for _obs in only_first_obs], dim=1
+            [_obs.flatten(start_dim=1)[:, 0] for _obs in only_first_obs],
+            dim=1,
         )
         # Get the mask from NaNs
-        attn_mask = only_first_obs_flat.isnan().float()
-        return attn_mask
+        return only_first_obs_flat.isnan().float()
 
-    def _copy_and_remove_nans_from_obs(
-        self, all_obs: List[List[torch.Tensor]], attention_mask: torch.Tensor
-    ) -> List[List[torch.Tensor]]:
-        """
-        Helper function to remove NaNs from observations using an attention mask.
-        """
+    def _copy_and_remove_nans_from_obs(  # noqa: PLR6301
+        self,
+        all_obs: list[list[torch.Tensor]],
+        attention_mask: torch.Tensor,
+    ) -> list[list[torch.Tensor]]:
+        """Helper function to remove NaNs from observations using an attention mask."""
         obs_with_no_nans = []
         for i_agent, single_agent_obs in enumerate(all_obs):
             no_nan_obs = []
@@ -359,12 +341,12 @@ class MultiAgentNetworkBody(torch.nn.Module):
 
     def forward(
         self,
-        obs_only: List[List[torch.Tensor]],
-        obs: List[List[torch.Tensor]],
-        actions: List[AgentAction],
+        obs_only: list[list[torch.Tensor]],
+        obs: list[list[torch.Tensor]],
+        actions: list[AgentAction],
         memories: Optional[torch.Tensor] = None,
         sequence_length: int = 1,
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
+    ) -> tuple[torch.Tensor, torch.Tensor]:
         """
         Returns sampled actions.
         If memory is enabled, return the memories as well.
@@ -382,7 +364,7 @@ class MultiAgentNetworkBody(torch.nn.Module):
         if obs:
             obs_attn_mask = self._get_masks_from_nans(obs)
             obs = self._copy_and_remove_nans_from_obs(obs, obs_attn_mask)
-            for inputs, action in zip(obs, actions):
+            for inputs, action in zip(obs, actions, strict=False):
                 encoded = self.observation_encoder(inputs)
                 cat_encodes = [
                     encoded,
@@ -411,7 +393,8 @@ class MultiAgentNetworkBody(torch.nn.Module):
         num_agents = torch.sum(flipped_masks, dim=1, keepdim=True)
         if torch.max(num_agents).item() > self._current_max_agents:
             self._current_max_agents = torch.nn.Parameter(
-                torch.as_tensor(torch.max(num_agents).item()), requires_grad=False
+                torch.as_tensor(torch.max(num_agents).item()),
+                requires_grad=False,
             )
 
         # num_agents will be -1 for a single agent and +1 when the current maximum is reached
@@ -434,42 +417,38 @@ class Critic(abc.ABC):
         Updates normalization of Actor based on the provided List of vector obs.
         :param vector_obs: A List of vector obs as tensors.
         """
-        pass
 
-    def critic_pass(
+    def critic_pass(  # noqa: B027
         self,
-        inputs: List[torch.Tensor],
+        inputs: list[torch.Tensor],
         memories: Optional[torch.Tensor] = None,
         sequence_length: int = 1,
-    ) -> Tuple[Dict[str, torch.Tensor], torch.Tensor]:
+    ) -> tuple[dict[str, torch.Tensor], torch.Tensor]:
         """
         Get value outputs for the given obs.
         :param inputs: List of inputs as tensors.
         :param memories: Tensor of memories, if using memory. Otherwise, None.
         :returns: Dict of reward stream to output tensor for values.
         """
-        pass
 
 
 class ValueNetwork(nn.Module, Critic):
     def __init__(
         self,
-        stream_names: List[str],
-        observation_specs: List[ObservationSpec],
+        stream_names: list[str],
+        observation_specs: list[ObservationSpec],
         network_settings: NetworkSettings,
         encoded_act_size: int = 0,
         outputs_per_stream: int = 1,
     ):
-
         # This is not a typo, we want to call __init__ of nn.Module
         nn.Module.__init__(self)
         self.network_body = NetworkBody(
-            observation_specs, network_settings, encoded_act_size=encoded_act_size
+            observation_specs,
+            network_settings,
+            encoded_act_size=encoded_act_size,
         )
-        if network_settings.memory is not None:
-            encoding_size = network_settings.memory.memory_size // 2
-        else:
-            encoding_size = network_settings.hidden_units
+        encoding_size = network_settings.memory.memory_size // 2 if network_settings.memory is not None else network_settings.hidden_units
         self.value_heads = ValueHeads(stream_names, encoding_size, outputs_per_stream)
 
     def update_normalization(self, buffer: AgentBuffer) -> None:
@@ -481,24 +460,29 @@ class ValueNetwork(nn.Module, Critic):
 
     def critic_pass(
         self,
-        inputs: List[torch.Tensor],
+        inputs: list[torch.Tensor],
         memories: Optional[torch.Tensor] = None,
         sequence_length: int = 1,
-    ) -> Tuple[Dict[str, torch.Tensor], torch.Tensor]:
+    ) -> tuple[dict[str, torch.Tensor], torch.Tensor]:
         value_outputs, critic_mem_out = self.forward(
-            inputs, memories=memories, sequence_length=sequence_length
+            inputs,
+            memories=memories,
+            sequence_length=sequence_length,
         )
         return value_outputs, critic_mem_out
 
     def forward(
         self,
-        inputs: List[torch.Tensor],
+        inputs: list[torch.Tensor],
         actions: Optional[torch.Tensor] = None,
         memories: Optional[torch.Tensor] = None,
         sequence_length: int = 1,
-    ) -> Tuple[Dict[str, torch.Tensor], torch.Tensor]:
+    ) -> tuple[dict[str, torch.Tensor], torch.Tensor]:
         encoding, memories = self.network_body(
-            inputs, actions, memories, sequence_length
+            inputs,
+            actions,
+            memories,
+            sequence_length,
         )
         output = self.value_heads(encoding)
         return output, memories
@@ -511,15 +495,14 @@ class Actor(abc.ABC):
         Updates normalization of Actor based on the provided List of vector obs.
         :param vector_obs: A List of vector obs as tensors.
         """
-        pass
 
-    def get_action_and_stats(
+    def get_action_and_stats(  # noqa: B027
         self,
-        inputs: List[torch.Tensor],
+        inputs: list[torch.Tensor],
         masks: Optional[torch.Tensor] = None,
         memories: Optional[torch.Tensor] = None,
         sequence_length: int = 1,
-    ) -> Tuple[AgentAction, ActionLogProbs, torch.Tensor, torch.Tensor]:
+    ) -> tuple[AgentAction, ActionLogProbs, torch.Tensor, torch.Tensor]:
         """
         Returns sampled actions.
         If memory is enabled, return the memories as well.
@@ -530,16 +513,15 @@ class Actor(abc.ABC):
         :return: A Tuple of AgentAction, ActionLogProbs, entropies, and memories.
             Memories will be None if not using memory.
         """
-        pass
 
-    def get_stats(
+    def get_stats(  # noqa: B027
         self,
-        inputs: List[torch.Tensor],
+        inputs: list[torch.Tensor],
         actions: AgentAction,
         masks: Optional[torch.Tensor] = None,
         memories: Optional[torch.Tensor] = None,
         sequence_length: int = 1,
-    ) -> Tuple[ActionLogProbs, torch.Tensor]:
+    ) -> tuple[ActionLogProbs, torch.Tensor]:
         """
         Returns log_probs for actions and entropies.
         If memory is enabled, return the memories as well.
@@ -552,21 +534,18 @@ class Actor(abc.ABC):
             Memories will be None if not using memory.
         """
 
-        pass
-
     @abc.abstractmethod
     def forward(
         self,
-        inputs: List[torch.Tensor],
+        inputs: list[torch.Tensor],
         masks: Optional[torch.Tensor] = None,
         memories: Optional[torch.Tensor] = None,
-    ) -> Tuple[Union[int, torch.Tensor], ...]:
+    ) -> tuple[Union[int, torch.Tensor], ...]:
         """
         Forward pass of the Actor for inference. This is required for export to ONNX, and
         the inputs and outputs of this method should not be changed without a respective change
         in the ONNX export code.
         """
-        pass
 
 
 class SimpleActor(nn.Module, Actor):
@@ -574,7 +553,7 @@ class SimpleActor(nn.Module, Actor):
 
     def __init__(
         self,
-        observation_specs: List[ObservationSpec],
+        observation_specs: list[ObservationSpec],
         network_settings: NetworkSettings,
         action_spec: ActionSpec,
         conditional_sigma: bool = False,
@@ -583,23 +562,26 @@ class SimpleActor(nn.Module, Actor):
         super().__init__()
         self.action_spec = action_spec
         self.version_number = torch.nn.Parameter(
-            torch.Tensor([self.MODEL_EXPORT_VERSION]), requires_grad=False
+            torch.Tensor([self.MODEL_EXPORT_VERSION]),
+            requires_grad=False,
         )
         self.is_continuous_int_deprecated = torch.nn.Parameter(
-            torch.Tensor([int(self.action_spec.is_continuous())]), requires_grad=False
+            torch.Tensor([int(self.action_spec.is_continuous())]),
+            requires_grad=False,
         )
         self.continuous_act_size_vector = torch.nn.Parameter(
-            torch.Tensor([int(self.action_spec.continuous_size)]), requires_grad=False
+            torch.Tensor([int(self.action_spec.continuous_size)]),
+            requires_grad=False,
         )
         self.discrete_act_size_vector = torch.nn.Parameter(
-            torch.Tensor([self.action_spec.discrete_branches]), requires_grad=False
+            torch.Tensor([self.action_spec.discrete_branches]),
+            requires_grad=False,
         )
         self.act_size_vector_deprecated = torch.nn.Parameter(
             torch.Tensor(
                 [
-                    self.action_spec.continuous_size
-                    + sum(self.action_spec.discrete_branches)
-                ]
+                    self.action_spec.continuous_size + sum(self.action_spec.discrete_branches),
+                ],
             ),
             requires_grad=False,
         )
@@ -609,7 +591,8 @@ class SimpleActor(nn.Module, Actor):
         else:
             self.encoding_size = network_settings.hidden_units
         self.memory_size_vector = torch.nn.Parameter(
-            torch.Tensor([int(self.network_body.memory_size)]), requires_grad=False
+            torch.Tensor([int(self.network_body.memory_size)]),
+            requires_grad=False,
         )
 
         self.action_model = ActionModel(
@@ -628,28 +611,31 @@ class SimpleActor(nn.Module, Actor):
 
     def get_action_and_stats(
         self,
-        inputs: List[torch.Tensor],
+        inputs: list[torch.Tensor],
         masks: Optional[torch.Tensor] = None,
         memories: Optional[torch.Tensor] = None,
         sequence_length: int = 1,
-    ) -> Tuple[AgentAction, ActionLogProbs, torch.Tensor, torch.Tensor]:
-
+    ) -> tuple[AgentAction, ActionLogProbs, torch.Tensor, torch.Tensor]:
         encoding, memories = self.network_body(
-            inputs, memories=memories, sequence_length=sequence_length
+            inputs,
+            memories=memories,
+            sequence_length=sequence_length,
         )
         action, log_probs, entropies = self.action_model(encoding, masks)
         return action, log_probs, entropies, memories
 
     def get_stats(
         self,
-        inputs: List[torch.Tensor],
+        inputs: list[torch.Tensor],
         actions: AgentAction,
         masks: Optional[torch.Tensor] = None,
         memories: Optional[torch.Tensor] = None,
         sequence_length: int = 1,
-    ) -> Tuple[ActionLogProbs, torch.Tensor]:
-        encoding, actor_mem_outs = self.network_body(
-            inputs, memories=memories, sequence_length=sequence_length
+    ) -> tuple[ActionLogProbs, torch.Tensor]:
+        encoding, _actor_mem_outs = self.network_body(
+            inputs,
+            memories=memories,
+            sequence_length=sequence_length,
         )
         log_probs, entropies = self.action_model.evaluate(encoding, masks, actions)
 
@@ -657,10 +643,10 @@ class SimpleActor(nn.Module, Actor):
 
     def forward(
         self,
-        inputs: List[torch.Tensor],
+        inputs: list[torch.Tensor],
         masks: Optional[torch.Tensor] = None,
         memories: Optional[torch.Tensor] = None,
-    ) -> Tuple[Union[int, torch.Tensor], ...]:
+    ) -> tuple[Union[int, torch.Tensor], ...]:
         """
         Note: This forward() method is required for exporting to ONNX. Don't modify the inputs and outputs.
 
@@ -668,13 +654,15 @@ class SimpleActor(nn.Module, Actor):
         so the size of return tuple varies with action spec.
         """
         encoding, memories_out = self.network_body(
-            inputs, memories=memories, sequence_length=1
+            inputs,
+            memories=memories,
+            sequence_length=1,
         )
 
         (
             cont_action_out,
             disc_action_out,
-            action_out_deprecated,
+            _action_out_deprecated,
         ) = self.action_model.get_action_out(encoding, masks)
         export_out = [self.version_number, self.memory_size_vector]
         if self.action_spec.continuous_size > 0:
@@ -689,10 +677,10 @@ class SimpleActor(nn.Module, Actor):
 class SharedActorCritic(SimpleActor, Critic):
     def __init__(
         self,
-        observation_specs: List[ObservationSpec],
+        observation_specs: list[ObservationSpec],
         network_settings: NetworkSettings,
         action_spec: ActionSpec,
-        stream_names: List[str],
+        stream_names: list[str],
         conditional_sigma: bool = False,
         tanh_squash: bool = False,
     ):
@@ -709,12 +697,14 @@ class SharedActorCritic(SimpleActor, Critic):
 
     def critic_pass(
         self,
-        inputs: List[torch.Tensor],
+        inputs: list[torch.Tensor],
         memories: Optional[torch.Tensor] = None,
         sequence_length: int = 1,
-    ) -> Tuple[Dict[str, torch.Tensor], torch.Tensor]:
+    ) -> tuple[dict[str, torch.Tensor], torch.Tensor]:
         encoding, memories_out = self.network_body(
-            inputs, memories=memories, sequence_length=sequence_length
+            inputs,
+            memories=memories,
+            sequence_length=sequence_length,
         )
         return self.value_heads(encoding), memories_out
 
@@ -723,7 +713,8 @@ class GlobalSteps(nn.Module):
     def __init__(self):
         super().__init__()
         self.__global_step = nn.Parameter(
-            torch.Tensor([0]).to(torch.int64), requires_grad=False
+            torch.Tensor([0]).to(torch.int64),
+            requires_grad=False,
         )
 
     @property
@@ -740,6 +731,6 @@ class GlobalSteps(nn.Module):
 
 class LearningRate(nn.Module):
     def __init__(self, lr):
-        # Todo: add learning rate decay
+        # TODO: add learning rate decay
         super().__init__()
         self.learning_rate = torch.Tensor([lr])

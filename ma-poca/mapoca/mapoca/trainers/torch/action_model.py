@@ -1,14 +1,11 @@
-from typing import List, Tuple, NamedTuple, Optional
-from mapoca.torch_utils import torch, nn
-from mapoca.trainers.torch.distributions import (
-    DistInstance,
-    DiscreteDistInstance,
-    GaussianDistribution,
-    MultiCategoricalDistribution,
-)
-from mapoca.trainers.torch.agent_action import AgentAction
-from mapoca.trainers.torch.action_log_probs import ActionLogProbs
+from typing import NamedTuple, Optional
+
 from mlagents_envs.base_env import ActionSpec
+
+from mapoca.torch_utils import nn, torch
+from mapoca.trainers.torch.action_log_probs import ActionLogProbs
+from mapoca.trainers.torch.agent_action import AgentAction
+from mapoca.trainers.torch.distributions import DiscreteDistInstance, DistInstance, GaussianDistribution, MultiCategoricalDistribution
 
 EPSILON = 1e-7  # Small value to avoid divide by zero
 
@@ -22,7 +19,7 @@ class DistInstances(NamedTuple):
     """
 
     continuous: Optional[DistInstance]
-    discrete: Optional[List[DiscreteDistInstance]]
+    discrete: Optional[list[DiscreteDistInstance]]
 
 
 class ActionModel(nn.Module):
@@ -60,21 +57,22 @@ class ActionModel(nn.Module):
 
         if self.action_spec.discrete_size > 0:
             self._discrete_distribution = MultiCategoricalDistribution(
-                self.encoding_size, self.action_spec.discrete_branches
+                self.encoding_size,
+                self.action_spec.discrete_branches,
             )
 
         # During training, clipping is done in TorchPolicy, but we need to clip before ONNX
         # export as well.
         self._clip_action_on_export = not tanh_squash
 
-    def _sample_action(self, dists: DistInstances) -> AgentAction:
+    def _sample_action(self, dists: DistInstances) -> AgentAction:  # noqa: PLR6301
         """
         Samples actions from a DistInstances tuple
         :params dists: The DistInstances tuple
-        :return: An AgentAction corresponding to the actions sampled from the DistInstances
+        :return: An AgentAction corresponding to the actions sampled from the DistInstances.
         """
         continuous_action: Optional[torch.Tensor] = None
-        discrete_action: Optional[List[torch.Tensor]] = None
+        discrete_action: Optional[list[torch.Tensor]] = None
         # This checks None because mypy complains otherwise
         if dists.continuous is not None:
             continuous_action = dists.continuous.sample()
@@ -89,10 +87,10 @@ class ActionModel(nn.Module):
         Creates a DistInstances tuple using the continuous and discrete distributions
         :params inputs: The encoding from the network body
         :params masks: Action masks for discrete actions
-        :return: A DistInstances tuple
+        :return: A DistInstances tuple.
         """
         continuous_dist: Optional[DistInstance] = None
-        discrete_dist: Optional[List[DiscreteDistInstance]] = None
+        discrete_dist: Optional[list[DiscreteDistInstance]] = None
         # This checks None because mypy complains otherwise
         if self._continuous_distribution is not None:
             continuous_dist = self._continuous_distribution(inputs)
@@ -100,9 +98,11 @@ class ActionModel(nn.Module):
             discrete_dist = self._discrete_distribution(inputs, masks)
         return DistInstances(continuous_dist, discrete_dist)
 
-    def _get_probs_and_entropy(
-        self, actions: AgentAction, dists: DistInstances
-    ) -> Tuple[ActionLogProbs, torch.Tensor]:
+    def _get_probs_and_entropy(  # noqa: PLR6301
+        self,
+        actions: AgentAction,
+        dists: DistInstances,
+    ) -> tuple[ActionLogProbs, torch.Tensor]:
         """
         Computes the log probabilites of the actions given distributions and entropies of
         the given distributions.
@@ -110,10 +110,10 @@ class ActionModel(nn.Module):
         :params dists: The DistInstances tuple
         :return: An ActionLogProbs tuple and a torch tensor of the distribution entropies.
         """
-        entropies_list: List[torch.Tensor] = []
+        entropies_list: list[torch.Tensor] = []
         continuous_log_prob: Optional[torch.Tensor] = None
-        discrete_log_probs: Optional[List[torch.Tensor]] = None
-        all_discrete_log_probs: Optional[List[torch.Tensor]] = None
+        discrete_log_probs: Optional[list[torch.Tensor]] = None
+        all_discrete_log_probs: Optional[list[torch.Tensor]] = None
         # This checks None because mypy complains otherwise
         if dists.continuous is not None:
             continuous_log_prob = dists.continuous.log_prob(actions.continuous_tensor)
@@ -122,21 +122,28 @@ class ActionModel(nn.Module):
             discrete_log_probs = []
             all_discrete_log_probs = []
             for discrete_action, discrete_dist in zip(
-                actions.discrete_list, dists.discrete  # type: ignore
+                actions.discrete_list,
+                dists.discrete,
+                strict=False,
             ):
                 discrete_log_prob = discrete_dist.log_prob(discrete_action)
                 entropies_list.append(discrete_dist.entropy())
                 discrete_log_probs.append(discrete_log_prob)
                 all_discrete_log_probs.append(discrete_dist.all_log_prob())
         action_log_probs = ActionLogProbs(
-            continuous_log_prob, discrete_log_probs, all_discrete_log_probs
+            continuous_log_prob,
+            discrete_log_probs,
+            all_discrete_log_probs,
         )
         entropies = torch.cat(entropies_list, dim=1)
         return action_log_probs, entropies
 
     def evaluate(
-        self, inputs: torch.Tensor, masks: torch.Tensor, actions: AgentAction
-    ) -> Tuple[ActionLogProbs, torch.Tensor]:
+        self,
+        inputs: torch.Tensor,
+        masks: torch.Tensor,
+        actions: AgentAction,
+    ) -> tuple[ActionLogProbs, torch.Tensor]:
         """
         Given actions and encoding from the network body, gets the distributions and
         computes the log probabilites and entropies.
@@ -157,7 +164,7 @@ class ActionModel(nn.Module):
         inference. Called by the Actor's forward call.
         :params inputs: The encoding from the network body
         :params masks: Action masks for discrete actions
-        :return: A tuple of torch tensors corresponding to the inference output
+        :return: A tuple of torch tensors corresponding to the inference output.
         """
         dists = self._get_dists(inputs, masks)
         continuous_out, discrete_out, action_out_deprecated = None, None, None
@@ -168,10 +175,7 @@ class ActionModel(nn.Module):
                 continuous_out = torch.clamp(continuous_out, -3, 3) / 3
                 action_out_deprecated = torch.clamp(action_out_deprecated, -3, 3) / 3
         if self.action_spec.discrete_size > 0 and dists.discrete is not None:
-            discrete_out_list = [
-                discrete_dist.exported_model_output()
-                for discrete_dist in dists.discrete
-            ]
+            discrete_out_list = [discrete_dist.exported_model_output() for discrete_dist in dists.discrete]
             discrete_out = torch.cat(discrete_out_list, dim=1)
             action_out_deprecated = torch.cat(discrete_out_list, dim=1)
         # deprecated action field does not support hybrid action
@@ -180,8 +184,10 @@ class ActionModel(nn.Module):
         return continuous_out, discrete_out, action_out_deprecated
 
     def forward(
-        self, inputs: torch.Tensor, masks: torch.Tensor
-    ) -> Tuple[AgentAction, ActionLogProbs, torch.Tensor]:
+        self,
+        inputs: torch.Tensor,
+        masks: torch.Tensor,
+    ) -> tuple[AgentAction, ActionLogProbs, torch.Tensor]:
         """
         The forward method of this module. Outputs the action, log probs,
         and entropies given the encoding from the network body.

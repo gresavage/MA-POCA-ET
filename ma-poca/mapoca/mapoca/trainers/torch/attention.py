@@ -1,24 +1,20 @@
-from mapoca.torch_utils import torch
 import warnings
-from typing import Tuple, Optional, List
-from mapoca.trainers.torch.layers import (
-    LinearEncoder,
-    Initialization,
-    linear_layer,
-    LayerNorm,
-)
-from mapoca.trainers.torch.model_serialization import exporting_to_onnx
+
+from typing import Optional
+
+from mapoca.torch_utils import torch
 from mapoca.trainers.exception import UnityTrainerException
+from mapoca.trainers.torch.layers import Initialization, LayerNorm, LinearEncoder, linear_layer
+from mapoca.trainers.torch.model_serialization import exporting_to_onnx
 
 
-def get_zero_entities_mask(entities: List[torch.Tensor]) -> List[torch.Tensor]:
+def get_zero_entities_mask(entities: list[torch.Tensor]) -> list[torch.Tensor]:
     """
     Takes a List of Tensors and returns a List of mask Tensor with 1 if the input was
     all zeros (on dimension 2) and 0 otherwise. This is used in the Attention
     layer to mask the padding observations.
     """
     with torch.no_grad():
-
         if exporting_to_onnx.is_exporting():
             with warnings.catch_warnings():
                 # We ignore a TracerWarning from PyTorch that warns that doing
@@ -32,20 +28,19 @@ def get_zero_entities_mask(entities: List[torch.Tensor]) -> List[torch.Tensor]:
                 # Barracuda also expect to get data in NCHW.
                 entities = [
                     torch.transpose(obs, 2, 1).reshape(
-                        -1, obs.shape[1].item(), obs.shape[2].item()
+                        -1,
+                        obs.shape[1].item(),
+                        obs.shape[2].item(),
                     )
                     for obs in entities
                 ]
 
         # Generate the masking tensors for each entities tensor (mask only if all zeros)
-        key_masks: List[torch.Tensor] = [
-            (torch.sum(ent ** 2, axis=2) < 0.01).float() for ent in entities
-        ]
+        key_masks: list[torch.Tensor] = [(torch.sum(ent**2, axis=2) < 0.01).float() for ent in entities]
     return key_masks
 
 
 class MultiHeadAttention(torch.nn.Module):
-
     NEG_INF = -1e6
 
     def __init__(self, embedding_size: int, num_heads: int):
@@ -63,7 +58,7 @@ class MultiHeadAttention(torch.nn.Module):
         dividable by the num_heads)
         :param total_max_elements: The maximum total number of entities that can be passed to
         the module
-        :param num_heads: The number of heads of the attention module
+        :param num_heads: The number of heads of the attention module.
         """
         super().__init__()
         self.n_heads = num_heads
@@ -78,15 +73,21 @@ class MultiHeadAttention(torch.nn.Module):
         n_q: int,
         n_k: int,
         key_mask: Optional[torch.Tensor] = None,
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
+    ) -> tuple[torch.Tensor, torch.Tensor]:
         b = -1  # the batch size
 
         query = query.reshape(
-            b, n_q, self.n_heads, self.head_size
+            b,
+            n_q,
+            self.n_heads,
+            self.head_size,
         )  # (b, n_q, h, emb / h)
         key = key.reshape(b, n_k, self.n_heads, self.head_size)  # (b, n_k, h, emb / h)
         value = value.reshape(
-            b, n_k, self.n_heads, self.head_size
+            b,
+            n_k,
+            self.n_heads,
+            self.head_size,
         )  # (b, n_k, h, emb / h)
 
         query = query.permute([0, 2, 1, 3])  # (b, h, n_q, emb / h)
@@ -101,12 +102,10 @@ class MultiHeadAttention(torch.nn.Module):
         qk = torch.matmul(query, key)  # (b, h, n_q, n_k)
 
         if key_mask is None:
-            qk = qk / (self.embedding_size ** 0.5)
+            qk = qk / (self.embedding_size**0.5)  # noqa: PLR6104
         else:
             key_mask = key_mask.reshape(b, 1, 1, n_k)
-            qk = (1 - key_mask) * qk / (
-                self.embedding_size ** 0.5
-            ) + key_mask * self.NEG_INF
+            qk = (1 - key_mask) * qk / (self.embedding_size**0.5) + key_mask * self.NEG_INF
 
         att = torch.softmax(qk, dim=3)  # (b, h, n_q, n_k)
 
@@ -115,7 +114,9 @@ class MultiHeadAttention(torch.nn.Module):
 
         value_attention = value_attention.permute([0, 2, 1, 3])  # (b, n_q, h, emb / h)
         value_attention = value_attention.reshape(
-            b, n_q, self.embedding_size
+            b,
+            n_q,
+            self.embedding_size,
         )  # (b, n_q, emb)
 
         return value_attention, att
@@ -177,7 +178,7 @@ class EntityEmbedding(torch.nn.Module):
             if exporting_to_onnx.is_exporting():
                 raise UnityTrainerException(
                     "Trying to export an attention mechanism that doesn't have a set max \
-                    number of elements."
+                    number of elements.",
                 )
             num_entities = entities.shape[1]
 
@@ -186,7 +187,9 @@ class EntityEmbedding(torch.nn.Module):
             # because ONNX only support input in NCHW (channel first) format.
             # Barracuda also expect to get data in NCHW.
             entities = torch.transpose(entities, 2, 1).reshape(
-                -1, num_entities, self.entity_size
+                -1,
+                num_entities,
+                self.entity_size,
             )
 
         if self.self_size > 0:
@@ -195,8 +198,7 @@ class EntityEmbedding(torch.nn.Module):
             # Concatenate all observations with self
             entities = torch.cat([expanded_self, entities], dim=2)
         # Encode entities
-        encoded_entities = self.self_ent_encoder(entities)
-        return encoded_entities
+        return self.self_ent_encoder(entities)
 
 
 class ResidualSelfAttention(torch.nn.Module):
@@ -222,7 +224,7 @@ class ResidualSelfAttention(torch.nn.Module):
             of elements in an entity sequence. Should be of length num_entities. Pass None to
             not restrict the number of elements; however, this will make the module
             unexportable to ONNX/Barracuda.
-        :param num_heads: Number of heads for Multi Head Self-Attention
+        :param num_heads: Number of heads for Multi Head Self-Attention.
         """
         super().__init__()
         self.max_num_ent: Optional[int] = None
@@ -230,38 +232,45 @@ class ResidualSelfAttention(torch.nn.Module):
             self.max_num_ent = entity_num_max_elements
 
         self.attention = MultiHeadAttention(
-            num_heads=num_heads, embedding_size=embedding_size
+            num_heads=num_heads,
+            embedding_size=embedding_size,
         )
 
         # Initialization scheme from http://www.cs.toronto.edu/~mvolkovs/ICML2020_tfixup.pdf
-        self.fc_q = linear_layer(
+        self.fc_q: torch.nn.Linear = linear_layer(
             embedding_size,
             embedding_size,
-            kernel_init=Initialization.Normal,
-            kernel_gain=(0.125 / embedding_size) ** 0.5,
+            # kernel_init=Initialization.Normal,
+            # kernel_gain=(0.125 / embedding_size) ** 0.5,
+            kernel_init=Initialization.XavierGlorotNormal,
         )
-        self.fc_k = linear_layer(
+        self.fc_k: torch.nn.Linear = linear_layer(
             embedding_size,
             embedding_size,
-            kernel_init=Initialization.Normal,
-            kernel_gain=(0.125 / embedding_size) ** 0.5,
+            # kernel_init=Initialization.Normal,
+            # kernel_gain=(0.125 / embedding_size) ** 0.5,
+            kernel_init=Initialization.XavierGlorotNormal,
         )
-        self.fc_v = linear_layer(
+        self.fc_v: torch.nn.Linear = linear_layer(
             embedding_size,
             embedding_size,
-            kernel_init=Initialization.Normal,
-            kernel_gain=(0.125 / embedding_size) ** 0.5,
+            # kernel_init=Initialization.Normal,
+            # kernel_gain=(0.125 / embedding_size) ** 0.5,
+            kernel_init=Initialization.XavierGlorotNormal,
+            kernel_gain=0.67,
         )
-        self.fc_out = linear_layer(
+        self.fc_out: torch.nn.Linear = linear_layer(
             embedding_size,
             embedding_size,
-            kernel_init=Initialization.Normal,
-            kernel_gain=(0.125 / embedding_size) ** 0.5,
+            # kernel_init=Initialization.Normal,
+            # kernel_gain=(0.125 / embedding_size) ** 0.5,
+            kernel_init=Initialization.XavierGlorotNormal,
+            kernel_gain=0.67,
         )
         self.embedding_norm = LayerNorm()
         self.residual_norm = LayerNorm()
 
-    def forward(self, inp: torch.Tensor, key_masks: List[torch.Tensor]) -> torch.Tensor:
+    def forward(self, inp: torch.Tensor, key_masks: list[torch.Tensor]) -> torch.Tensor:
         # Gather the maximum number of entities information
         mask = torch.cat(key_masks, dim=1)
 
@@ -279,7 +288,7 @@ class ResidualSelfAttention(torch.nn.Module):
             if exporting_to_onnx.is_exporting():
                 raise UnityTrainerException(
                     "Trying to export an attention mechanism that doesn't have a set max \
-                    number of elements."
+                    number of elements.",
                 )
 
         output, _ = self.attention(query, key, value, num_ent, num_ent, mask)
@@ -289,5 +298,4 @@ class ResidualSelfAttention(torch.nn.Module):
         # Average Pooling
         numerator = torch.sum(output * (1 - mask).reshape(-1, num_ent, 1), dim=1)
         denominator = torch.sum(1 - mask, dim=1, keepdim=True) + self.EPSILON
-        output = numerator / denominator
-        return output
+        return numerator / denominator

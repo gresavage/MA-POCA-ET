@@ -7,16 +7,17 @@ from typing import cast
 
 import numpy as np
 
-from mlagents_envs.logging_util import get_logger
 from mlagents_envs.base_env import BehaviorSpec
+from mlagents_envs.logging_util import get_logger
+
+from mapoca.trainers.behavior_id_utils import BehaviorIdentifiers
 from mapoca.trainers.buffer import BufferKey, RewardSignalUtil
-from mapoca.trainers.trainer.rl_trainer import RLTrainer
 from mapoca.trainers.policy import Policy
 from mapoca.trainers.policy.torch_policy import TorchPolicy
 from mapoca.trainers.ppo.optimizer_torch import TorchPPOOptimizer
+from mapoca.trainers.settings import PPOSettings, TrainerSettings
+from mapoca.trainers.trainer.rl_trainer import RLTrainer
 from mapoca.trainers.trajectory import Trajectory
-from mapoca.trainers.behavior_id_utils import BehaviorIdentifiers
-from mapoca.trainers.settings import TrainerSettings, PPOSettings
 
 logger = get_logger(__name__)
 
@@ -53,10 +54,11 @@ class PPOTrainer(RLTrainer):
             reward_buff_cap,
         )
         self.hyperparameters: PPOSettings = cast(
-            PPOSettings, self.trainer_settings.hyperparameters
+            "PPOSettings",
+            self.trainer_settings.hyperparameters,
         )
         self.seed = seed
-        self.policy: Policy = None  # type: ignore
+        self.policy: Policy | None = None
 
     def _process_trajectory(self, trajectory: Trajectory) -> None:
         """
@@ -90,7 +92,7 @@ class PPOTrainer(RLTrainer):
 
         for name, v in value_estimates.items():
             agent_buffer_trajectory[RewardSignalUtil.value_estimates_key(name)].extend(
-                v
+                v,
             )
             self._stats_reporter.add_stat(
                 f"Policy/{self.optimizer.reward_signals[name].name.capitalize()} Value Estimate",
@@ -99,14 +101,12 @@ class PPOTrainer(RLTrainer):
 
         # Evaluate all reward functions
         self.collected_rewards["environment"][agent_id] += np.sum(
-            agent_buffer_trajectory[BufferKey.ENVIRONMENT_REWARDS]
+            agent_buffer_trajectory[BufferKey.ENVIRONMENT_REWARDS],
         )
         for name, reward_signal in self.optimizer.reward_signals.items():
-            evaluate_result = (
-                reward_signal.evaluate(agent_buffer_trajectory) * reward_signal.strength
-            )
+            evaluate_result = reward_signal.evaluate(agent_buffer_trajectory) * reward_signal.strength
             agent_buffer_trajectory[RewardSignalUtil.rewards_key(name)].extend(
-                evaluate_result
+                evaluate_result,
             )
             # Report the reward signals
             self.collected_rewards[name][agent_id] += np.sum(evaluate_result)
@@ -117,12 +117,8 @@ class PPOTrainer(RLTrainer):
         for name in self.optimizer.reward_signals:
             bootstrap_value = value_next[name]
 
-            local_rewards = agent_buffer_trajectory[
-                RewardSignalUtil.rewards_key(name)
-            ].get_batch()
-            local_value_estimates = agent_buffer_trajectory[
-                RewardSignalUtil.value_estimates_key(name)
-            ].get_batch()
+            local_rewards = agent_buffer_trajectory[RewardSignalUtil.rewards_key(name)].get_batch()
+            local_value_estimates = agent_buffer_trajectory[RewardSignalUtil.value_estimates_key(name)].get_batch()
 
             local_advantage = get_gae(
                 rewards=local_rewards,
@@ -134,17 +130,17 @@ class PPOTrainer(RLTrainer):
             local_return = local_advantage + local_value_estimates
             # This is later use as target for the different value estimates
             agent_buffer_trajectory[RewardSignalUtil.returns_key(name)].set(
-                local_return
+                local_return,
             )
             agent_buffer_trajectory[RewardSignalUtil.advantage_key(name)].set(
-                local_advantage
+                local_advantage,
             )
             tmp_advantages.append(local_advantage)
             tmp_returns.append(local_return)
 
         # Get global advantages
         global_advantages = list(
-            np.mean(np.array(tmp_advantages, dtype=np.float32), axis=0)
+            np.mean(np.array(tmp_advantages, dtype=np.float32), axis=0),
         )
         global_returns = list(np.mean(np.array(tmp_returns, dtype=np.float32), axis=0))
         agent_buffer_trajectory[BufferKey.ADVANTAGES].set(global_advantages)
@@ -159,7 +155,7 @@ class PPOTrainer(RLTrainer):
     def _is_ready_update(self):
         """
         Returns whether or not the trainer has enough elements to run update model
-        :return: A boolean corresponding to whether or not update_model() can be run
+        :return: A boolean corresponding to whether or not update_model() can be run.
         """
         size_of_buffer = self.update_buffer.num_experiences
         return size_of_buffer > self.hyperparameters.buffer_size
@@ -174,22 +170,21 @@ class PPOTrainer(RLTrainer):
 
         # Make sure batch_size is a multiple of sequence length. During training, we
         # will need to reshape the data into a batch_size x sequence_length tensor.
-        batch_size = (
-            self.hyperparameters.batch_size
-            - self.hyperparameters.batch_size % self.policy.sequence_length
-        )
+        batch_size = self.hyperparameters.batch_size - self.hyperparameters.batch_size % self.policy.sequence_length
         # Make sure there is at least one sequence
         batch_size = max(batch_size, self.policy.sequence_length)
 
         n_sequences = max(
-            int(self.hyperparameters.batch_size / self.policy.sequence_length), 1
+            int(self.hyperparameters.batch_size / self.policy.sequence_length),
+            1,
         )
 
         advantages = np.array(
-            self.update_buffer[BufferKey.ADVANTAGES].get_batch(), dtype=np.float32
+            self.update_buffer[BufferKey.ADVANTAGES].get_batch(),
+            dtype=np.float32,
         )
         self.update_buffer[BufferKey.ADVANTAGES].set(
-            (advantages - advantages.mean()) / (advantages.std() + 1e-10)
+            (advantages - advantages.mean()) / (advantages.std() + 1e-10),
         )
         num_epoch = self.hyperparameters.num_epoch
         batch_update_stats = defaultdict(list)
@@ -199,7 +194,8 @@ class PPOTrainer(RLTrainer):
             max_num_batch = buffer_length // batch_size
             for i in range(0, max_num_batch * batch_size, batch_size):
                 update_stats = self.optimizer.update(
-                    buffer.make_mini_batch(i, i + batch_size), n_sequences
+                    buffer.make_mini_batch(i, i + batch_size),
+                    n_sequences,
                 )
                 for stat_name, value in update_stats.items():
                     batch_update_stats[stat_name].append(value)
@@ -215,30 +211,34 @@ class PPOTrainer(RLTrainer):
         return True
 
     def create_torch_policy(
-        self, parsed_behavior_id: BehaviorIdentifiers, behavior_spec: BehaviorSpec
+        self,
+        parsed_behavior_id: BehaviorIdentifiers,
+        behavior_spec: BehaviorSpec,
     ) -> TorchPolicy:
         """
         Creates a policy with a PyTorch backend and PPO hyperparameters
         :param parsed_behavior_id:
         :param behavior_spec: specifications for policy construction
-        :return policy
+        :return policy.
         """
-        policy = TorchPolicy(
+        return TorchPolicy(
             self.seed,
             behavior_spec,
             self.trainer_settings,
             condition_sigma_on_obs=False,  # Faster training for PPO
             separate_critic=True,  # Match network architecture with TF
         )
-        return policy
 
     def create_ppo_optimizer(self) -> TorchPPOOptimizer:
-        return TorchPPOOptimizer(  # type: ignore
-            cast(TorchPolicy, self.policy), self.trainer_settings  # type: ignore
+        return TorchPPOOptimizer(  # type: ignore[return-value]
+            cast("TorchPolicy", self.policy),
+            self.trainer_settings,  # type: ignore[arg-type]
         )  # type: ignore
 
     def add_policy(
-        self, parsed_behavior_id: BehaviorIdentifiers, policy: Policy
+        self,
+        parsed_behavior_id: BehaviorIdentifiers,
+        policy: Policy,
     ) -> None:
         """
         Adds policy to trainer.
@@ -247,16 +247,14 @@ class PPOTrainer(RLTrainer):
         """
         if self.policy:
             logger.warning(
-                "Your environment contains multiple teams, but {} doesn't support adversarial games. Enable self-play to \
-                    train adversarial games.".format(
-                    self.__class__.__name__
-                )
+                f"Your environment contains multiple teams, but {self.__class__.__name__} doesn't support adversarial games."
+                " Enable self-play to train adversarial games.",
             )
         self.policy = policy
         self.policies[parsed_behavior_id.behavior_id] = policy
 
         self.optimizer = self.create_ppo_optimizer()
-        for _reward_signal in self.optimizer.reward_signals.keys():
+        for _reward_signal in self.optimizer.reward_signals:
             self.collected_rewards[_reward_signal] = defaultdict(lambda: 0)
 
         self.model_saver.register(self.policy)
@@ -269,9 +267,8 @@ class PPOTrainer(RLTrainer):
     def get_policy(self, name_behavior_id: str) -> Policy:
         """
         Gets policy from trainer associated with name_behavior_id
-        :param name_behavior_id: full identifier of policy
+        :param name_behavior_id: full identifier of policy.
         """
-
         return self.policy
 
 
@@ -285,7 +282,7 @@ def discount_rewards(r, gamma=0.99, value_next=0.0):
     """
     discounted_r = np.zeros_like(r)
     running_add = value_next
-    for t in reversed(range(0, r.size)):
+    for t in reversed(range(r.size)):
         running_add = running_add * gamma + r[t]
         discounted_r[t] = running_add
     return discounted_r
@@ -303,5 +300,4 @@ def get_gae(rewards, value_estimates, value_next=0.0, gamma=0.99, lambd=0.95):
     """
     value_estimates = np.append(value_estimates, value_next)
     delta_t = rewards + gamma * value_estimates[1:] - value_estimates[:-1]
-    advantage = discount_rewards(r=delta_t, gamma=gamma * lambd)
-    return advantage
+    return discount_rewards(r=delta_t, gamma=gamma * lambd)

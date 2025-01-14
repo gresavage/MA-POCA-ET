@@ -2,24 +2,26 @@
 # Contains an implementation of SAC as described in https://arxiv.org/abs/1801.01290
 # and implemented in https://github.com/hill-a/stable-baselines
 
+
 from collections import defaultdict
-from typing import Dict, cast
-import os
+from pathlib import Path
+from typing import cast
 
 import numpy as np
-from mapoca.trainers.policy.checkpoint_manager import ModelCheckpoint
 
+from mlagents_envs.base_env import BehaviorSpec
 from mlagents_envs.logging_util import get_logger
 from mlagents_envs.timers import timed
-from mlagents_envs.base_env import BehaviorSpec
+
+from mapoca.trainers.behavior_id_utils import BehaviorIdentifiers
 from mapoca.trainers.buffer import BufferKey, RewardSignalUtil
 from mapoca.trainers.policy import Policy
-from mapoca.trainers.trainer.rl_trainer import RLTrainer
+from mapoca.trainers.policy.checkpoint_manager import ModelCheckpoint
 from mapoca.trainers.policy.torch_policy import TorchPolicy
 from mapoca.trainers.sac.optimizer_torch import TorchSACOptimizer
-from mapoca.trainers.trajectory import Trajectory, ObsUtil
-from mapoca.trainers.behavior_id_utils import BehaviorIdentifiers
-from mapoca.trainers.settings import TrainerSettings, SACSettings
+from mapoca.trainers.settings import SACSettings, TrainerSettings
+from mapoca.trainers.trainer.rl_trainer import RLTrainer
+from mapoca.trainers.trajectory import ObsUtil, Trajectory
 
 logger = get_logger(__name__)
 
@@ -62,10 +64,11 @@ class SACTrainer(RLTrainer):
         )
 
         self.seed = seed
-        self.policy: Policy = None  # type: ignore
-        self.optimizer: TorchSACOptimizer = None  # type: ignore
+        self.policy: Policy | None = None
+        self.optimizer: TorchSACOptimizer | None = None
         self.hyperparameters: SACSettings = cast(
-            SACSettings, trainer_settings.hyperparameters
+            "SACSettings",
+            trainer_settings.hyperparameters,
         )
         self._step = 0
 
@@ -74,9 +77,7 @@ class SACTrainer(RLTrainer):
         self.reward_signal_update_steps = 1
 
         self.steps_per_update = self.hyperparameters.steps_per_update
-        self.reward_signal_steps_per_update = (
-            self.hyperparameters.reward_signal_steps_per_update
-        )
+        self.reward_signal_steps_per_update = self.hyperparameters.reward_signal_steps_per_update
 
         self.checkpoint_replay_buffer = self.hyperparameters.save_replay_buffer
 
@@ -100,35 +101,27 @@ class SACTrainer(RLTrainer):
             self.save_replay_buffer()
 
     def save_replay_buffer(self) -> None:
-        """
-        Save the training buffer's update buffer to a pickle file.
-        """
-        filename = os.path.join(self.artifact_path, "last_replay_buffer.hdf5")
+        """Save the training buffer's update buffer to a pickle file."""
+        filename = Path(self.artifact_path) / "last_replay_buffer.hdf5"
         logger.info(f"Saving Experience Replay Buffer to {filename}...")
-        with open(filename, "wb") as file_object:
+        with Path(filename).open("wb") as file_object:
             self.update_buffer.save_to_file(file_object)
             logger.info(
-                f"Saved Experience Replay Buffer ({os.path.getsize(filename)} bytes)."
+                f"Saved Experience Replay Buffer ({Path(filename).stat().st_size} bytes).",
             )
 
     def load_replay_buffer(self) -> None:
-        """
-        Loads the last saved replay buffer from a file.
-        """
-        filename = os.path.join(self.artifact_path, "last_replay_buffer.hdf5")
+        """Loads the last saved replay buffer from a file."""
+        filename = Path(self.artifact_path) / "last_replay_buffer.hdf5"
         logger.info(f"Loading Experience Replay Buffer from {filename}...")
-        with open(filename, "rb+") as file_object:
+        with Path(filename).open("rb+") as file_object:
             self.update_buffer.load_from_file(file_object)
         logger.debug(
-            "Experience replay buffer has {} experiences.".format(
-                self.update_buffer.num_experiences
-            )
+            f"Experience replay buffer has {self.update_buffer.num_experiences} experiences.",
         )
 
     def _process_trajectory(self, trajectory: Trajectory) -> None:
-        """
-        Takes a trajectory and processes it, putting it into the replay buffer.
-        """
+        """Takes a trajectory and processes it, putting it into the replay buffer."""
         super()._process_trajectory(trajectory)
         last_step = trajectory.steps[-1]
         agent_id = trajectory.agent_id  # All the agents should have the same ID
@@ -143,12 +136,10 @@ class SACTrainer(RLTrainer):
 
         # Evaluate all reward functions for reporting purposes
         self.collected_rewards["environment"][agent_id] += np.sum(
-            agent_buffer_trajectory[BufferKey.ENVIRONMENT_REWARDS]
+            agent_buffer_trajectory[BufferKey.ENVIRONMENT_REWARDS],
         )
         for name, reward_signal in self.optimizer.reward_signals.items():
-            evaluate_result = (
-                reward_signal.evaluate(agent_buffer_trajectory) * reward_signal.strength
-            )
+            evaluate_result = reward_signal.evaluate(agent_buffer_trajectory) * reward_signal.strength
 
             # Report the reward signals
             self.collected_rewards[name][agent_id] += np.sum(evaluate_result)
@@ -159,7 +150,9 @@ class SACTrainer(RLTrainer):
             _,
             value_memories,
         ) = self.optimizer.get_trajectory_value_estimates(
-            agent_buffer_trajectory, trajectory.next_obs, trajectory.done_reached
+            agent_buffer_trajectory,
+            trajectory.next_obs,
+            trajectory.done_reached,
         )
         if value_memories is not None:
             agent_buffer_trajectory[BufferKey.CRITIC_MEMORY].set(value_memories)
@@ -186,11 +179,10 @@ class SACTrainer(RLTrainer):
     def _is_ready_update(self) -> bool:
         """
         Returns whether or not the trainer has enough elements to run update model
-        :return: A boolean corresponding to whether or not _update_policy() can be run
+        :return: A boolean corresponding to whether or not _update_policy() can be run.
         """
         return (
-            self.update_buffer.num_experiences >= self.hyperparameters.batch_size
-            and self._step >= self.hyperparameters.buffer_init_steps
+            self.update_buffer.num_experiences >= self.hyperparameters.batch_size and self._step >= self.hyperparameters.buffer_init_steps
         )
 
     @timed
@@ -212,22 +204,22 @@ class SACTrainer(RLTrainer):
                 self.load_replay_buffer()
             except (AttributeError, FileNotFoundError):
                 logger.warning(
-                    "Replay buffer was unable to load, starting from scratch."
+                    "Replay buffer was unable to load, starting from scratch.",
                 )
             logger.debug(
-                "Loaded update buffer with {} sequences".format(
-                    self.update_buffer.num_experiences
-                )
+                f"Loaded update buffer with {self.update_buffer.num_experiences} sequences",
             )
 
     def create_torch_policy(
-        self, parsed_behavior_id: BehaviorIdentifiers, behavior_spec: BehaviorSpec
+        self,
+        parsed_behavior_id: BehaviorIdentifiers,
+        behavior_spec: BehaviorSpec,
     ) -> TorchPolicy:
         """
         Creates a policy with a PyTorch backend and SAC hyperparameters
         :param parsed_behavior_id:
         :param behavior_spec: specifications for policy construction
-        :return policy
+        :return policy.
         """
         policy = TorchPolicy(
             self.seed,
@@ -248,13 +240,12 @@ class SACTrainer(RLTrainer):
         has_updated = False
         self.cumulative_returns_since_policy_update.clear()
         n_sequences = max(
-            int(self.hyperparameters.batch_size / self.policy.sequence_length), 1
+            int(self.hyperparameters.batch_size / self.policy.sequence_length),
+            1,
         )
 
-        batch_update_stats: Dict[str, list] = defaultdict(list)
-        while (
-            self._step - self.hyperparameters.buffer_init_steps
-        ) / self.update_steps > self.steps_per_update:
+        batch_update_stats: dict[str, list] = defaultdict(list)
+        while (self._step - self.hyperparameters.buffer_init_steps) / self.update_steps > self.steps_per_update:
             logger.debug(f"Updating SAC policy at step {self._step}")
             buffer = self.update_buffer
             if self.update_buffer.num_experiences >= self.hyperparameters.batch_size:
@@ -264,9 +255,7 @@ class SACTrainer(RLTrainer):
                 )
                 # Get rewards for each reward
                 for name, signal in self.optimizer.reward_signals.items():
-                    sampled_minibatch[RewardSignalUtil.rewards_key(name)] = (
-                        signal.evaluate(sampled_minibatch) * signal.strength
-                    )
+                    sampled_minibatch[RewardSignalUtil.rewards_key(name)] = signal.evaluate(sampled_minibatch) * signal.strength
 
                 update_stats = self.optimizer.update(sampled_minibatch, n_sequences)
                 for stat_name, value in update_stats.items():
@@ -287,7 +276,7 @@ class SACTrainer(RLTrainer):
         # a large buffer at each update.
         if self.update_buffer.num_experiences > self.hyperparameters.buffer_size:
             self.update_buffer.truncate(
-                int(self.hyperparameters.buffer_size * BUFFER_TRUNCATE_PERCENT)
+                int(self.hyperparameters.buffer_size * BUFFER_TRUNCATE_PERCENT),
             )
         return has_updated
 
@@ -303,15 +292,14 @@ class SACTrainer(RLTrainer):
         """
         buffer = self.update_buffer
         n_sequences = max(
-            int(self.hyperparameters.batch_size / self.policy.sequence_length), 1
+            int(self.hyperparameters.batch_size / self.policy.sequence_length),
+            1,
         )
-        batch_update_stats: Dict[str, list] = defaultdict(list)
-        while (
-            self._step - self.hyperparameters.buffer_init_steps
-        ) / self.reward_signal_update_steps > self.reward_signal_steps_per_update:
+        batch_update_stats: dict[str, list] = defaultdict(list)
+        while (self._step - self.hyperparameters.buffer_init_steps) / self.reward_signal_update_steps > self.reward_signal_steps_per_update:
             # Get minibatches for reward signal update if needed
             reward_signal_minibatches = {}
-            for name in self.optimizer.reward_signals.keys():
+            for name in self.optimizer.reward_signals:
                 logger.debug(f"Updating {name} at step {self._step}")
                 if name != "extrinsic":
                     reward_signal_minibatches[name] = buffer.sample_mini_batch(
@@ -319,7 +307,8 @@ class SACTrainer(RLTrainer):
                         sequence_length=self.policy.sequence_length,
                     )
             update_stats = self.optimizer.update_reward_signals(
-                reward_signal_minibatches, n_sequences
+                reward_signal_minibatches,
+                n_sequences,
             )
             for stat_name, value in update_stats.items():
                 batch_update_stats[stat_name].append(value)
@@ -329,27 +318,26 @@ class SACTrainer(RLTrainer):
                 self._stats_reporter.add_stat(stat, np.mean(stat_list))
 
     def create_sac_optimizer(self) -> TorchSACOptimizer:
-        return TorchSACOptimizer(  # type: ignore
-            cast(TorchPolicy, self.policy), self.trainer_settings  # type: ignore
+        return TorchSACOptimizer(  # type: ignore[return-value]
+            cast("TorchPolicy", self.policy),
+            self.trainer_settings,  # type: ignore[arg-type]
         )  # type: ignore
 
     def add_policy(
-        self, parsed_behavior_id: BehaviorIdentifiers, policy: Policy
+        self,
+        parsed_behavior_id: BehaviorIdentifiers,
+        policy: Policy,
     ) -> None:
-        """
-        Adds policy to trainer.
-        """
+        """Adds policy to trainer."""
         if self.policy:
             logger.warning(
-                "Your environment contains multiple teams, but {} doesn't support adversarial games. Enable self-play to \
-                    train adversarial games.".format(
-                    self.__class__.__name__
-                )
+                f"Your environment contains multiple teams, but {self.__class__.__name__} doesn't support adversarial games. "
+                "Enable self-play to train adversarial games.",
             )
         self.policy = policy
         self.policies[parsed_behavior_id.behavior_id] = policy
         self.optimizer = self.create_sac_optimizer()
-        for _reward_signal in self.optimizer.reward_signals.keys():
+        for _reward_signal in self.optimizer.reward_signals:
             self.collected_rewards[_reward_signal] = defaultdict(lambda: 0)
 
         self.model_saver.register(self.policy)
@@ -361,13 +349,12 @@ class SACTrainer(RLTrainer):
         # Assume steps were updated at the correct ratio before
         self.update_steps = int(max(1, self._step / self.steps_per_update))
         self.reward_signal_update_steps = int(
-            max(1, self._step / self.reward_signal_steps_per_update)
+            max(1, self._step / self.reward_signal_steps_per_update),
         )
 
     def get_policy(self, name_behavior_id: str) -> Policy:
         """
         Gets policy from trainer associated with name_behavior_id
-        :param name_behavior_id: full identifier of policy
+        :param name_behavior_id: full identifier of policy.
         """
-
         return self.policy

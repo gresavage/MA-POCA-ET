@@ -1,0 +1,218 @@
+[project]
+name = "ma-poca-et"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.10.1,<3.10.12"
+dependencies = ["mapoca"]
+
+[dependency-groups]
+dev = ["pre-commit >=4,<5"]
+lint = ["ruff ~=0.6", "mypy ~=1.9", "types-PyYAML>6", "types-pytz>=v2024.2.0.20241003"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.uv.sources]
+mapoca = { workspace = true }
+
+[tool.uv.workspace]
+members = ["ma-poca/mapoca"]
+
+[tool.ruff]
+exclude = [
+    ".svn",
+    "CVS",
+    ".bzr",
+    ".hg",
+    ".git",
+    "__pycache__",
+    ".tox",
+    ".nox",
+    ".eggs",
+    "*.egg",
+    "test/*",
+    "scripts/*",
+    "scratches/*",
+    ".venv",
+    ".dagger",
+    "**/site-packages/**/*.pyi",
+    "**/.vscode/extensions/**",
+]
+line-length = 140
+target-version = "py310"
+preview = true # necessary for E266 and FURB
+
+fix = true
+
+[tool.ruff.format]
+quote-style = "double"
+docstring-code-format = true
+
+[tool.ruff.lint]
+select = [
+    "A",     # flake8-builtins
+    "ANN",   # flake8-annotations
+    "ARG",   # flake8-unused-arguments
+    "ASYNC", # flake8-async
+    "B",     # flake8-bugbear
+    "BLE",   # flake8-blind-except
+    "C",     # mccabe, flake8-comprehensions
+    "C4",    # flake8-comprehensions
+    "COM",   # flake8-commas
+    # "D",     # pydocstyle
+    # "DOC",  # pydoclint
+    "DJ",   # flake8-django
+    "DTZ",  # flake8-datetimez
+    "E",    # pycodestyle - Error
+    "EM",   # flake8-errmsg
+    "ERA",  # eradicate
+    "EXE",  # flake8-executable
+    "F",    # Pyflakes
+    "FA",   # flake8-future-annotations
+    "FAST", # FastAPI
+    "FLY",  # flynt
+    "FURB", # refurb
+    "G002", # flake8-logging-format
+    "G010", # flake8-logging-format
+    "I",    # isort
+    "ICN",  # flake8-import-conventions
+    "INP",  # flake8-no-pep420
+    "INT",  # flake8-gettext
+    "ISC",  # flake8-implicit-str-concat
+    "LOG",  # flake8-logging
+    "N",    # pep8-naming
+    "NPY",  # NumPy-specific rules
+    "PD",   # Pandas vet
+    "PERF", # Perflint
+    "PGH",  # pygrep-hooks
+    "PIE",  # flake8-pie
+    "PL",   # Pylint
+    "PT",   # flake8-pytest-style
+    "PTH",  # flake8-use-pathlib
+    "PYI",  # flake8-pyi
+    "Q",    # flake8-quotes
+    "RET",  # flake8-return
+    "RSE",  # flake8-raise
+    "RUF",  # Ruff-specific rules
+    "S",    # flake8-bandit
+    "SIM",  # flake8-simplify
+    "SLF",  # flake8-self
+    "SLOT", # flake8-slots
+    "T",    # flake8-debugger, flake8-print
+    "TC",   # flake8-type-checking
+    "TD",   # flake8-todos
+    "TRY",  # tryceratops
+    "UP",   # pyupgrade
+    "W",    # pycodestyle - Warning
+    "YTT",  # flake8-2020
+]
+ignore = [
+    "ANN401",
+    "ARG002",
+    "ARG004",
+    "ARG005",
+    "ANN002",
+    "ANN003",
+    "C901",
+    # "D100",
+    # "D102",
+    # "D203",
+    # "D213",
+    "E203",
+    "E731",
+    "EM101",
+    "EM102",
+    "PLR2004",
+    "NPY002",
+    "S101",
+    "T201",
+    "TD002",
+    "TD003",
+    "TRY003",
+    "UP007",
+    "UP045",
+]
+external = ["W503", "W504"]
+fixable = ["ALL"]
+unfixable = ["ERA"]
+extend-safe-fixes = ["D200", "D400", "RUF052", "TC004"]
+
+
+[tool.ruff.lint.pylint]
+# min-public-methods = 1 # not supported
+max-args = 15
+max-locals = 25
+# max-attributes=15 # not supported
+# max-parents=15 # not supported
+max-branches = 20
+
+# ignored PyLint codes:
+#     C0103: ignored by default since 'N' codes were not selected
+#     R0801: not supported
+#     R0902: not supported
+#     R0903: not supported
+#     W0511: ignored by default since 'FIX' codes were not selected
+#     W1202: ignored by default since 'G' codes were not selected
+#     W1203: ignored by default since 'G' codes were not selected
+#     R0401: not supported
+#     E0213: ignored by default since 'N' codes were not selected
+#     E1101: not supported
+
+[tool.ruff.lint.flake8-annotations]
+allow-star-arg-any = true
+ignore-fully-untyped = true
+suppress-dummy-args = true
+suppress-none-returning = true
+
+[tool.ruff.lint.flake8-import-conventions.extend-aliases]
+matplotlib = "mpl"
+pettingzoo = "pz"
+"dask.array" = "da"
+"dask.dataframe" = "dd"
+
+[tool.ruff.lint.isort]
+split-on-trailing-comma = false
+case-sensitive = true
+combine-as-imports = true
+force-wrap-aliases = true
+lines-between-types = 1
+section-order = ["future", "standard-library", "data", "numpy", "pymoo", "ray", "torch", "third-party", "first-party", "local-folder"]
+
+[tool.ruff.lint.isort.sections]
+"numpy" = ["numpy"]
+"torch" = ["torch", "torchgeometric", "torchvision"]
+"ray" = ["ray"]
+"pymoo" = ["pymoo"]
+"data" = ["pandas", "matplotlib", "seaborn"]
+
+[tool.ruff.lint.flake8-unused-arguments]
+ignore-variadic-names = true
+
+[tool.ruff.lint.pydocstyle]
+convention = "numpy"
+
+[tool.mypy]
+ignore_missing_imports = true
+files = "mo_marl"
+follow_imports = "silent"
+# keep code clean by removing unused ignores
+warn_unused_ignores = true
+warn_redundant_casts = true
+disable_error_code = "annotation-unchecked"
+# don't typecheck None -> otherwise Optional[<type>] will cause type errors
+strict_optional = false
+pretty = true
+exclude = ['.*/site-packages/.*\.pyi', '.*/\.vscode/extensions/.*', "scratches", "docs", ".dagger"]
+
+########################
+# pydocstringformatter #
+########################
+[tool.pydocstringformatter]
+write = true
+exclude = ["docs/**"]
+strip-whitespaces = true
+max-line-length = 140
+style = "numpydoc"
+linewrap-full-docstring = true

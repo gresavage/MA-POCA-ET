@@ -1,23 +1,23 @@
 # # Unity ML-Agents Toolkit
-from typing import List, Deque, Dict
 import abc
+
 from collections import deque
 
-from mlagents_envs.logging_util import get_logger
 from mlagents_envs.base_env import BehaviorSpec
+from mlagents_envs.logging_util import get_logger
+
+from mapoca.trainers.agent_processor import AgentManagerQueue
+from mapoca.trainers.behavior_id_utils import BehaviorIdentifiers
+from mapoca.trainers.policy import Policy
+from mapoca.trainers.settings import TrainerSettings
 from mapoca.trainers.stats import StatsReporter
 from mapoca.trainers.trajectory import Trajectory
-from mapoca.trainers.agent_processor import AgentManagerQueue
-from mapoca.trainers.policy import Policy
-from mapoca.trainers.behavior_id_utils import BehaviorIdentifiers
-from mapoca.trainers.settings import TrainerSettings
-
 
 logger = get_logger(__name__)
 
 
 class Trainer(abc.ABC):
-    """This class is the base class for the mlagents_envs.trainers"""
+    """This class is the base class for the mlagents_envs.trainers."""
 
     def __init__(
         self,
@@ -42,33 +42,29 @@ class Trainer(abc.ABC):
         self._stats_reporter = StatsReporter(brain_name)
         self.is_training = training
         self.load = load
-        self._reward_buffer: Deque[float] = deque(maxlen=reward_buff_cap)
-        self.policy_queues: List[AgentManagerQueue[Policy]] = []
-        self.trajectory_queues: List[AgentManagerQueue[Trajectory]] = []
+        self._reward_buffer: deque[float] = deque(maxlen=reward_buff_cap)
+        self.policy_queues: list[AgentManagerQueue[Policy]] = []
+        self.trajectory_queues: list[AgentManagerQueue[Trajectory]] = []
         self._step: int = 0
         self.artifact_path = artifact_path
         self.summary_freq = self.trainer_settings.summary_freq
-        self.policies: Dict[str, Policy] = {}
+        self.policies: dict[str, Policy] = {}
 
     @property
     def stats_reporter(self):
-        """
-        Returns the stats reporter associated with this Trainer.
-        """
+        """Returns the stats reporter associated with this Trainer."""
         return self._stats_reporter
 
     @property
     def parameters(self) -> TrainerSettings:
-        """
-        Returns the trainer parameters of the trainer.
-        """
+        """Returns the trainer parameters of the trainer."""
         return self.trainer_settings
 
     @property
     def get_max_steps(self) -> int:
         """
         Returns the maximum number of steps. Is used to know when the trainer should be stopped.
-        :return: The maximum number of steps of the trainer
+        :return: The maximum number of steps of the trainer.
         """
         return self.trainer_settings.max_steps
 
@@ -76,7 +72,7 @@ class Trainer(abc.ABC):
     def get_step(self) -> int:
         """
         Returns the number of steps the trainer has performed
-        :return: the step count of the trainer
+        :return: the step count of the trainer.
         """
         return self._step
 
@@ -85,7 +81,7 @@ class Trainer(abc.ABC):
         """
         Whether or not to run the trainer in a thread. True allows the trainer to
         update the policy while the environment is taking steps. Set to False to
-        enforce strict on-policy updates (i.e. don't update the policy when taking steps.)
+        enforce strict on-policy updates (i.e. don't update the policy when taking steps.).
         """
         return self._threaded
 
@@ -99,7 +95,7 @@ class Trainer(abc.ABC):
         return self.is_training and self.get_step <= self.get_max_steps
 
     @property
-    def reward_buffer(self) -> Deque[float]:
+    def reward_buffer(self) -> deque[float]:
         """
         Returns the reward buffer. The reward buffer contains the cumulative
         rewards of the most recent episodes completed by agents using this
@@ -110,10 +106,7 @@ class Trainer(abc.ABC):
 
     @abc.abstractmethod
     def save_model(self) -> None:
-        """
-        Saves model file(s) for the policy or policies associated with this trainer.
-        """
-        pass
+        """Saves model file(s) for the policy or policies associated with this trainer."""
 
     @abc.abstractmethod
     def end_episode(self):
@@ -121,7 +114,6 @@ class Trainer(abc.ABC):
         A signal that the Episode has ended. The buffer must be reset.
         Get only called when the academy resets.
         """
-        pass
 
     @abc.abstractmethod
     def create_policy(
@@ -130,26 +122,17 @@ class Trainer(abc.ABC):
         behavior_spec: BehaviorSpec,
         create_graph: bool = False,
     ) -> Policy:
-        """
-        Creates policy
-        """
-        pass
+        """Creates policy."""
 
     @abc.abstractmethod
     def add_policy(
-        self, parsed_behavior_id: BehaviorIdentifiers, policy: Policy
+        self, parsed_behavior_id: BehaviorIdentifiers, policy: Policy,
     ) -> None:
-        """
-        Adds policy to trainer.
-        """
-        pass
+        """Adds policy to trainer."""
 
     @abc.abstractmethod
     def get_policy(self, name_behavior_id: str) -> Policy:
-        """
-        Gets policy from trainer.
-        """
-        pass
+        """Gets policy from trainer."""
 
     @abc.abstractmethod
     def advance(self) -> None:
@@ -159,7 +142,6 @@ class Trainer(abc.ABC):
         a policy using the steps in them, and if needed pushing a new policy onto the right
         policy queues (self.policy_queues).
         """
-        pass
 
     def publish_policy_queue(self, policy_queue: AgentManagerQueue[Policy]) -> None:
         """
@@ -170,7 +152,7 @@ class Trainer(abc.ABC):
         self.policy_queues.append(policy_queue)
 
     def subscribe_trajectory_queue(
-        self, trajectory_queue: AgentManagerQueue[Trajectory]
+        self, trajectory_queue: AgentManagerQueue[Trajectory],
     ) -> None:
         """
         Adds a trajectory queue to the list of queues for the trainer to ingest Trajectories from.

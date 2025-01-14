@@ -1,21 +1,22 @@
-from typing import Any, Dict, List, Tuple, Optional
-import numpy as np
-from mapoca.torch_utils import torch, default_device
 import copy
 
-from mapoca.trainers.action_info import ActionInfo
-from mapoca.trainers.behavior_id_utils import get_global_agent_id
-from mapoca.trainers.policy import Policy
-from mlagents_envs.base_env import DecisionSteps, BehaviorSpec
+from typing import Any, Optional
+
+import numpy as np
+
+from mlagents_envs.base_env import BehaviorSpec, DecisionSteps
 from mlagents_envs.timers import timed
 
-from mapoca.trainers.settings import TrainerSettings
-from mapoca.trainers.torch.networks import SimpleActor, SharedActorCritic, GlobalSteps
-
-from mapoca.trainers.torch.utils import ModelUtils
+from mapoca.torch_utils import default_device, torch
+from mapoca.trainers.action_info import ActionInfo
+from mapoca.trainers.behavior_id_utils import get_global_agent_id
 from mapoca.trainers.buffer import AgentBuffer
-from mapoca.trainers.torch.agent_action import AgentAction
+from mapoca.trainers.policy import Policy
+from mapoca.trainers.settings import TrainerSettings
 from mapoca.trainers.torch.action_log_probs import ActionLogProbs
+from mapoca.trainers.torch.agent_action import AgentAction
+from mapoca.trainers.torch.networks import GlobalSteps, SharedActorCritic, SimpleActor
+from mapoca.trainers.torch.utils import ModelUtils
 
 EPSILON = 1e-7  # Small value to avoid divide by zero
 
@@ -42,7 +43,7 @@ class TorchPolicy(Policy):
         or a clipped output.
         """
         super().__init__(
-            seed, behavior_spec, trainer_settings, tanh_squash, condition_sigma_on_obs
+            seed, behavior_spec, trainer_settings, tanh_squash, condition_sigma_on_obs,
         )
         self.global_step = (
             GlobalSteps()
@@ -100,7 +101,7 @@ class TorchPolicy(Policy):
             mask = torch.ones([len(decision_requests), num_discrete_flat])
             if decision_requests.action_mask is not None:
                 mask = torch.as_tensor(
-                    1 - np.concatenate(decision_requests.action_mask, axis=1)
+                    1 - np.concatenate(decision_requests.action_mask, axis=1),
                 )
         return mask
 
@@ -110,18 +111,17 @@ class TorchPolicy(Policy):
         :param buffer: The buffer with the observations to add to the running estimate
         of the distribution.
         """
-
         if self.normalize:
             self.actor.update_normalization(buffer)
 
     @timed
     def sample_actions(
         self,
-        obs: List[torch.Tensor],
+        obs: list[torch.Tensor],
         masks: Optional[torch.Tensor] = None,
         memories: Optional[torch.Tensor] = None,
         seq_len: int = 1,
-    ) -> Tuple[AgentAction, ActionLogProbs, torch.Tensor, torch.Tensor]:
+    ) -> tuple[AgentAction, ActionLogProbs, torch.Tensor, torch.Tensor]:
         """
         :param obs: List of observations.
         :param masks: Loss masks for RNN, else None.
@@ -130,27 +130,27 @@ class TorchPolicy(Policy):
         :return: Tuple of AgentAction, ActionLogProbs, entropies, and output memories.
         """
         actions, log_probs, entropies, memories = self.actor.get_action_and_stats(
-            obs, masks, memories, seq_len
+            obs, masks, memories, seq_len,
         )
         return (actions, log_probs, entropies, memories)
 
     def evaluate_actions(
         self,
-        obs: List[torch.Tensor],
+        obs: list[torch.Tensor],
         actions: AgentAction,
         masks: Optional[torch.Tensor] = None,
         memories: Optional[torch.Tensor] = None,
         seq_len: int = 1,
-    ) -> Tuple[ActionLogProbs, torch.Tensor]:
+    ) -> tuple[ActionLogProbs, torch.Tensor]:
         log_probs, entropies = self.actor.get_stats(
-            obs, actions, masks, memories, seq_len
+            obs, actions, masks, memories, seq_len,
         )
         return log_probs, entropies
 
     @timed
     def evaluate(
-        self, decision_requests: DecisionSteps, global_agent_ids: List[str]
-    ) -> Dict[str, Any]:
+        self, decision_requests: DecisionSteps, global_agent_ids: list[str],
+    ) -> dict[str, Any]:
         """
         Evaluates policy for the agent experiences provided.
         :param global_agent_ids:
@@ -162,13 +162,13 @@ class TorchPolicy(Policy):
         tensor_obs = [torch.as_tensor(np_ob) for np_ob in obs]
 
         memories = torch.as_tensor(self.retrieve_memories(global_agent_ids)).unsqueeze(
-            0
+            0,
         )
 
         run_out = {}
         with torch.no_grad():
             action, log_probs, entropy, memories = self.sample_actions(
-                tensor_obs, masks=masks, memories=memories
+                tensor_obs, masks=masks, memories=memories,
             )
         action_tuple = action.to_action_tuple()
         run_out["action"] = action_tuple
@@ -184,14 +184,14 @@ class TorchPolicy(Policy):
         return run_out
 
     def get_action(
-        self, decision_requests: DecisionSteps, worker_id: int = 0
+        self, decision_requests: DecisionSteps, worker_id: int = 0,
     ) -> ActionInfo:
         """
         Decides actions given observations information, and takes them in environment.
         :param worker_id:
         :param decision_requests: A dictionary of behavior names and DecisionSteps from environment.
         :return: an ActionInfo containing action, memories, values and an object
-        to be passed to add experiences
+        to be passed to add experiences.
         """
         if len(decision_requests) == 0:
             return ActionInfo.empty()
@@ -228,19 +228,17 @@ class TorchPolicy(Policy):
         return step
 
     def increment_step(self, n_steps):
-        """
-        Increments model step.
-        """
+        """Increments model step."""
         self.global_step.increment(n_steps)
         return self.get_current_step()
 
-    def load_weights(self, values: List[np.ndarray]) -> None:
+    def load_weights(self, values: list[np.ndarray]) -> None:
         self.actor.load_state_dict(values)
 
     def init_load_weights(self) -> None:
         pass
 
-    def get_weights(self) -> List[np.ndarray]:
+    def get_weights(self) -> list[np.ndarray]:
         return copy.deepcopy(self.actor.state_dict())
 
     def get_modules(self):

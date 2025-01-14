@@ -1,6 +1,7 @@
-from typing import Optional
-
 import os
+
+from pathlib import Path
+from typing import Optional
 
 
 def get_num_threads_to_use() -> Optional[int]:
@@ -25,17 +26,16 @@ def _get_num_available_cpus() -> Optional[int]:
 
     if period > 0 and quota > 0:
         return int(quota // period)
-    elif period > 0 and share > 0 and is_kubernetes:
+    if period > 0 and share > 0 and is_kubernetes:
         # In kubernetes, each requested CPU is 1024 CPU shares
         # https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/#how-pods-with-resource-limits-are-run
         return int(share // 1024)
-    else:
-        return os.cpu_count()
+    return os.cpu_count()
 
 
 def _read_in_integer_file(filename: str) -> int:
     try:
-        with open(filename) as f:
+        with Path(filename).open("r", encoding="utf-8") as f:
             return int(f.read().rstrip())
     except FileNotFoundError:
         return -1

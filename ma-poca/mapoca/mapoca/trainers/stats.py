@@ -1,23 +1,26 @@
+import abc
+import time
+
 from collections import defaultdict
 from enum import Enum
-from typing import List, Dict, NamedTuple, Any, Optional
-import numpy as np
-import abc
-import os
-import time
+from pathlib import Path
 from threading import RLock
+from typing import Any, NamedTuple, Optional
 
-from mlagents_envs.side_channel.stats_side_channel import StatsAggregationMethod
+import numpy as np
+
+from torch.utils.tensorboard import SummaryWriter
 
 from mlagents_envs.logging_util import get_logger
+from mlagents_envs.side_channel.stats_side_channel import StatsAggregationMethod
 from mlagents_envs.timers import set_gauge
-from torch.utils.tensorboard import SummaryWriter
+
 from mapoca.torch_utils.globals import get_rank
 
 logger = get_logger(__name__)
 
 
-def _dict_to_str(param_dict: Dict[str, Any], num_tabs: int) -> str:
+def _dict_to_str(param_dict: dict[str, Any], num_tabs: int) -> str:
     """
     Takes a parameter dictionary and converts it to a human-readable string.
     Recurses if there are multiple levels of dict. Used to print out hyperparameters.
@@ -27,20 +30,14 @@ def _dict_to_str(param_dict: Dict[str, Any], num_tabs: int) -> str:
     """
     if not isinstance(param_dict, dict):
         return str(param_dict)
-    else:
-        append_newline = "\n" if num_tabs > 0 else ""
-        return append_newline + "\n".join(
-            [
-                "\t"
-                + "  " * num_tabs
-                + "{}:\t{}".format(x, _dict_to_str(param_dict[x], num_tabs + 1))
-                for x in param_dict
-            ]
-        )
+    append_newline = "\n" if num_tabs > 0 else ""
+    return append_newline + "\n".join(
+        ["\t" + "  " * num_tabs + f"{x}:\t{_dict_to_str(param_dict[x], num_tabs + 1)}" for x in param_dict],
+    )
 
 
 class StatsSummary(NamedTuple):
-    full_dist: List[float]
+    full_dist: list[float]
     aggregation_method: StatsAggregationMethod
 
     @staticmethod
@@ -51,8 +48,7 @@ class StatsSummary(NamedTuple):
     def aggregated_value(self):
         if self.aggregation_method == StatsAggregationMethod.SUM:
             return self.sum
-        else:
-            return self.mean
+        return self.mean
 
     @property
     def mean(self):
@@ -82,7 +78,7 @@ class StatsWriter(abc.ABC):
     and writes it out by some method.
     """
 
-    def on_add_stat(
+    def on_add_stat(  # noqa: B027
         self,
         category: str,
         key: str,
@@ -98,11 +94,13 @@ class StatsWriter(abc.ABC):
         :param value: The value of the statistic.
         :param aggregation: The aggregation method for the statistic, default StatsAggregationMethod.AVERAGE.
         """
-        pass
 
     @abc.abstractmethod
     def write_stats(
-        self, category: str, values: Dict[str, StatsSummary], step: int
+        self,
+        category: str,
+        values: dict[str, StatsSummary],
+        step: int,
     ) -> None:
         """
         Callback to record training information
@@ -111,10 +109,12 @@ class StatsWriter(abc.ABC):
         :param step: The current training step.
         :return:
         """
-        pass
 
-    def add_property(
-        self, category: str, property_type: StatsPropertyType, value: Any
+    def add_property(  # noqa: B027
+        self,
+        category: str,
+        property_type: StatsPropertyType,
+        value: Any,
     ) -> None:
         """
         Add a generic property to the StatsWriter. This could be e.g. a Dict of hyperparameters,
@@ -125,23 +125,21 @@ class StatsWriter(abc.ABC):
         :param property_type: The type of property.
         :param value: The property itself.
         """
-        pass
 
 
 class GaugeWriter(StatsWriter):
-    """
-    Write all stats that we receive to the timer gauges, so we can track them offline easily
-    """
+    """Write all stats that we receive to the timer gauges, so we can track them offline easily."""
 
     @staticmethod
     def sanitize_string(s: str) -> str:
-        """
-        Clean up special characters in the category and value names.
-        """
+        """Clean up special characters in the category and value names."""
         return s.replace("/", ".").replace(" ", "")
 
-    def write_stats(
-        self, category: str, values: Dict[str, StatsSummary], step: int
+    def write_stats(  # noqa: PLR6301
+        self,
+        category: str,
+        values: dict[str, StatsSummary],
+        step: int,
     ) -> None:
         for val, stats_summary in values.items():
             set_gauge(
@@ -163,7 +161,10 @@ class ConsoleWriter(StatsWriter):
         self.rank = get_rank()
 
     def write_stats(
-        self, category: str, values: Dict[str, StatsSummary], step: int
+        self,
+        category: str,
+        values: dict[str, StatsSummary],
+        step: int,
     ) -> None:
         is_training = "Not Training"
         if "Is Training" in values:
@@ -172,9 +173,8 @@ class ConsoleWriter(StatsWriter):
                 is_training = "Training"
 
         elapsed_time = time.time() - self.training_start_time
-        log_info: List[str] = [category]
-        log_info.append(f"Step: {step}")
-        log_info.append(f"Time Elapsed: {elapsed_time:0.3f} s")
+        log_info: list[str] = [category]
+        log_info.extend((f"Step: {step}", f"Time Elapsed: {elapsed_time:0.3f} s"))
         if "Environment/Cumulative Reward" in values:
             stats_summary = values["Environment/Cumulative Reward"]
             if self.rank is not None:
@@ -192,18 +192,18 @@ class ConsoleWriter(StatsWriter):
                 elo_stats = values["Self-play/ELO"]
                 log_info.append(f"ELO: {elo_stats.mean:0.3f}")
         else:
-            log_info.append("No episode was completed since last summary")
-            log_info.append(is_training)
+            log_info.extend(("No episode was completed since last summary", is_training))
         logger.info(". ".join(log_info) + ".")
 
     def add_property(
-        self, category: str, property_type: StatsPropertyType, value: Any
+        self,
+        category: str,
+        property_type: StatsPropertyType,
+        value: Any,
     ) -> None:
         if property_type == StatsPropertyType.HYPERPARAMETERS:
             logger.info(
-                """Hyperparameters for behavior name {}: \n{}""".format(
-                    category, _dict_to_str(value, 0)
-                )
+                f"""Hyperparameters for behavior name {category}: \n{_dict_to_str(value, 0)}""",
             )
         elif property_type == StatsPropertyType.SELF_PLAY:
             assert isinstance(value, bool)
@@ -215,7 +215,7 @@ class TensorboardWriter(StatsWriter):
         self,
         base_dir: str,
         clear_past_data: bool = False,
-        hidden_keys: Optional[List[str]] = None,
+        hidden_keys: Optional[list[str]] = None,
     ):
         """
         A StatsWriter that writes to a Tensorboard summary.
@@ -227,55 +227,61 @@ class TensorboardWriter(StatsWriter):
         :param hidden_keys: If provided, Tensorboard Writer won't write statistics identified with these Keys in
         Tensorboard summary.
         """
-        self.summary_writers: Dict[str, SummaryWriter] = {}
+        self.summary_writers: dict[str, SummaryWriter] = {}
         self.base_dir: str = base_dir
         self._clear_past_data = clear_past_data
-        self.hidden_keys: List[str] = hidden_keys if hidden_keys is not None else []
+        self.hidden_keys: list[str] = hidden_keys if hidden_keys is not None else []
 
     def write_stats(
-        self, category: str, values: Dict[str, StatsSummary], step: int
+        self,
+        category: str,
+        values: dict[str, StatsSummary],
+        step: int,
     ) -> None:
         self._maybe_create_summary_writer(category)
         for key, value in values.items():
             if key in self.hidden_keys:
                 continue
             self.summary_writers[category].add_scalar(
-                f"{key}", value.aggregated_value, step
+                f"{key}",
+                value.aggregated_value,
+                step,
             )
             if value.aggregation_method == StatsAggregationMethod.HISTOGRAM:
                 self.summary_writers[category].add_histogram(
-                    f"{key}_hist", np.array(value.full_dist), step
+                    f"{key}_hist",
+                    np.array(value.full_dist),
+                    step,
                 )
             self.summary_writers[category].flush()
 
     def _maybe_create_summary_writer(self, category: str) -> None:
         if category not in self.summary_writers:
-            filewriter_dir = "{basedir}/{category}".format(
-                basedir=self.base_dir, category=category
-            )
-            os.makedirs(filewriter_dir, exist_ok=True)
+            filewriter_dir = f"{self.base_dir}/{category}"
+            Path(filewriter_dir).mkdir(parents=True, exist_ok=True)
             if self._clear_past_data:
                 self._delete_all_events_files(filewriter_dir)
             self.summary_writers[category] = SummaryWriter(filewriter_dir)
 
-    def _delete_all_events_files(self, directory_name: str) -> None:
-        for file_name in os.listdir(directory_name):
-            if file_name.startswith("events.out"):
+    def _delete_all_events_files(self, directory_name: str) -> None:  # noqa: PLR6301
+        for file_name in Path(directory_name).iterdir():
+            if str(file_name).startswith("events.out"):
                 logger.warning(
-                    f"Deleting TensorBoard data {file_name} that was left over from a "
-                    "previous run."
+                    f"Deleting TensorBoard data {file_name} that was left over from a previous run.",
                 )
-                full_fname = os.path.join(directory_name, file_name)
+                full_fname = Path(directory_name) / file_name
                 try:
-                    os.remove(full_fname)
+                    full_fname.unlink()
                 except OSError:
-                    logger.error(
-                        "{} was left over from a previous run and "
-                        "not deleted.".format(full_fname)
+                    logger.exception(
+                        f"{full_fname} was left over from a previous run and not deleted.",
                     )
 
     def add_property(
-        self, category: str, property_type: StatsPropertyType, value: Any
+        self,
+        category: str,
+        property_type: StatsPropertyType,
+        value: Any,
     ) -> None:
         if property_type == StatsPropertyType.HYPERPARAMETERS:
             assert isinstance(value, dict)
@@ -287,11 +293,11 @@ class TensorboardWriter(StatsWriter):
 
 
 class StatsReporter:
-    writers: List[StatsWriter] = []
-    stats_dict: Dict[str, Dict[str, List]] = defaultdict(lambda: defaultdict(list))
+    writers: list[StatsWriter] = []  # noqa: RUF012
+    stats_dict: dict[str, dict[str, list]] = defaultdict(lambda: defaultdict(list))  # noqa: RUF012
     lock = RLock()
-    stats_aggregation: Dict[str, Dict[str, StatsAggregationMethod]] = defaultdict(
-        lambda: defaultdict(lambda: StatsAggregationMethod.AVERAGE)
+    stats_aggregation: dict[str, dict[str, StatsAggregationMethod]] = defaultdict(  # noqa: RUF012
+        lambda: defaultdict(lambda: StatsAggregationMethod.AVERAGE),
     )
 
     def __init__(self, category: str):
@@ -350,12 +356,13 @@ class StatsReporter:
         """
         with StatsReporter.lock:
             StatsReporter.stats_dict[self.category][key] = [value]
-            StatsReporter.stats_aggregation[self.category][
-                key
-            ] = StatsAggregationMethod.MOST_RECENT
+            StatsReporter.stats_aggregation[self.category][key] = StatsAggregationMethod.MOST_RECENT
             for writer in StatsReporter.writers:
                 writer.on_add_stat(
-                    self.category, key, value, StatsAggregationMethod.MOST_RECENT
+                    self.category,
+                    key,
+                    value,
+                    StatsAggregationMethod.MOST_RECENT,
                 )
 
     def write_stats(self, step: int) -> None:
@@ -367,7 +374,7 @@ class StatsReporter:
         :param step: Training step which to write these stats as.
         """
         with StatsReporter.lock:
-            values: Dict[str, StatsSummary] = {}
+            values: dict[str, StatsSummary] = {}
             for key in StatsReporter.stats_dict[self.category]:
                 if len(StatsReporter.stats_dict[self.category][key]) > 0:
                     stat_summary = self.get_stats_summaries(key)

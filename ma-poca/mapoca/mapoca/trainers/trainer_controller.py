@@ -2,33 +2,25 @@
 # ## ML-Agent Learning
 """Launches trainers for each External Brains in a Unity Environment."""
 
-import os
+import contextlib
 import threading
-from typing import Dict, Set, List
+
 from collections import defaultdict
+from pathlib import Path
 
 import numpy as np
 
+from mlagents_envs.exception import UnityCommunicationException, UnityCommunicatorStoppedException, UnityEnvironmentException
 from mlagents_envs.logging_util import get_logger
-from mapoca.trainers.env_manager import EnvManager, EnvironmentStep
-from mlagents_envs.exception import (
-    UnityEnvironmentException,
-    UnityCommunicationException,
-    UnityCommunicatorStoppedException,
-)
-from mlagents_envs.timers import (
-    hierarchical_timer,
-    timed,
-    get_timer_stack_for_thread,
-    merge_gauges,
-)
-from mapoca.trainers.trainer import Trainer
-from mapoca.trainers.environment_parameter_manager import EnvironmentParameterManager
-from mapoca.trainers.trainer import TrainerFactory
-from mapoca.trainers.behavior_id_utils import BehaviorIdentifiers
-from mapoca.trainers.agent_processor import AgentManager
+from mlagents_envs.timers import get_timer_stack_for_thread, hierarchical_timer, merge_gauges, timed
+
 from mapoca import torch_utils
 from mapoca.torch_utils.globals import get_rank
+from mapoca.trainers.agent_processor import AgentManager
+from mapoca.trainers.behavior_id_utils import BehaviorIdentifiers
+from mapoca.trainers.env_manager import EnvManager, EnvironmentStep
+from mapoca.trainers.environment_parameter_manager import EnvironmentParameterManager
+from mapoca.trainers.trainer import Trainer, TrainerFactory
 
 
 class TrainerController:
@@ -51,8 +43,8 @@ class TrainerController:
         :param training_seed: Seed to use for Numpy and Torch random number generation.
         :param threaded: Whether or not to run trainers in a separate thread. Disable for testing/debugging.
         """
-        self.trainers: Dict[str, Trainer] = {}
-        self.brain_name_to_identifier: Dict[str, Set] = defaultdict(set)
+        self.trainers: dict[str, Trainer] = {}
+        self.brain_name_to_identifier: dict[str, set] = defaultdict(set)
         self.trainer_factory = trainer_factory
         self.output_path = output_path
         self.logger = get_logger(__name__)
@@ -60,9 +52,9 @@ class TrainerController:
         self.train_model = train
         self.param_manager = param_manager
         self.ghost_controller = self.trainer_factory.ghost_controller
-        self.registered_behavior_ids: Set[str] = set()
+        self.registered_behavior_ids: set[str] = set()
 
-        self.trainer_threads: List[threading.Thread] = []
+        self.trainer_threads: list[threading.Thread] = []
         self.kill_trainers = False
         np.random.seed(training_seed)
         torch_utils.torch.manual_seed(training_seed)
@@ -70,34 +62,32 @@ class TrainerController:
 
     @timed
     def _save_models(self):
-        """
-        Saves current model to checkpoint folder.
-        """
+        """Saves current model to checkpoint folder."""
         if self.rank is not None and self.rank != 0:
             return
 
-        for brain_name in self.trainers.keys():
+        for brain_name in self.trainers:
             self.trainers[brain_name].save_model()
         self.logger.debug("Saved Model")
 
     @staticmethod
     def _create_output_path(output_path):
+        output_path = Path(output_path)
         try:
-            if not os.path.exists(output_path):
-                os.makedirs(output_path)
-        except Exception:
+            if not output_path.exists():
+                output_path.mkdir(parents=True)
+        except Exception as err:
             raise UnityEnvironmentException(
-                f"The folder {output_path} containing the "
-                "generated model could not be "
-                "accessed. Please make sure the "
-                "permissions are set correctly."
-            )
+                f"The folder {output_path} containing the generated model could not be "
+                "accessed. Please make sure the permissions are set correctly.",
+            ) from err
 
     @timed
     def _reset_env(self, env_manager: EnvManager) -> None:
         """Resets the environment.
 
-        Returns:
+        Returns
+        -------
             A Data structure corresponding to the initial reset state of the
             environment.
         """
@@ -107,15 +97,13 @@ class TrainerController:
         self._register_new_behaviors(env_manager, env_manager.first_step_infos)
 
     def _not_done_training(self) -> bool:
-        return (
-            any(t.should_still_train for t in self.trainers.values())
-            or not self.train_model
-        ) or len(self.trainers) == 0
+        return (any(t.should_still_train for t in self.trainers.values()) or not self.train_model) or len(self.trainers) == 0
 
     def _create_trainer_and_manager(
-        self, env_manager: EnvManager, name_behavior_id: str
+        self,
+        env_manager: EnvManager,
+        name_behavior_id: str,
     ) -> None:
-
         parsed_behavior_id = BehaviorIdentifiers.from_name_behavior_id(name_behavior_id)
         brain_name = parsed_behavior_id.brain_name
         trainerthread = None
@@ -127,11 +115,14 @@ class TrainerController:
             if trainer.threaded:
                 # Only create trainer thread for new trainers
                 trainerthread = threading.Thread(
-                    target=self.trainer_update_func, args=(trainer,), daemon=True
+                    target=self.trainer_update_func,
+                    args=(trainer,),
+                    daemon=True,
                 )
                 self.trainer_threads.append(trainerthread)
             env_manager.on_training_started(
-                brain_name, self.trainer_factory.trainer_config[brain_name]
+                brain_name,
+                self.trainer_factory.trainer_config[brain_name],
             )
 
         policy = trainer.create_policy(
@@ -160,7 +151,9 @@ class TrainerController:
             trainerthread.start()
 
     def _create_trainers_and_managers(
-        self, env_manager: EnvManager, behavior_ids: Set[str]
+        self,
+        env_manager: EnvManager,
+        behavior_ids: set[str],
     ) -> None:
         for behavior_id in behavior_ids:
             self._create_trainer_and_manager(env_manager, behavior_id)
@@ -186,16 +179,14 @@ class TrainerController:
         ) as ex:
             self.join_threads()
             self.logger.info(
-                "Learning was interrupted. Please wait while the graph is generated."
+                "Learning was interrupted. Please wait while the graph is generated.",
             )
-            if isinstance(ex, KeyboardInterrupt) or isinstance(
-                ex, UnityCommunicatorStoppedException
-            ):
+            if isinstance(ex, KeyboardInterrupt | UnityCommunicatorStoppedException):
                 pass
             else:
                 # If the environment failed, we want to make sure to raise
                 # the exception so we exit the process with an return code of 1.
-                raise ex
+                raise
         finally:
             if self.train_model:
                 self._save_models()
@@ -214,7 +205,9 @@ class TrainerController:
         # Attempt to increment the lessons of the brains who
         # were ready.
         updated, param_must_reset = self.param_manager.update_lessons(
-            curr_step, max_step, reward_buff
+            curr_step,
+            max_step,
+            reward_buff,
         )
         if updated:
             for trainer in self.trainers.values():
@@ -242,7 +235,8 @@ class TrainerController:
         ) in self.param_manager.get_current_lesson_number().items():
             for trainer in self.trainers.values():
                 trainer.stats_reporter.set_stat(
-                    f"Environment/Lesson Number/{param_name}", lesson_number
+                    f"Environment/Lesson Number/{param_name}",
+                    lesson_number,
                 )
 
         for trainer in self.trainers.values():
@@ -253,7 +247,9 @@ class TrainerController:
         return num_steps
 
     def _register_new_behaviors(
-        self, env_manager: EnvManager, step_infos: List[EnvironmentStep]
+        self,
+        env_manager: EnvManager,
+        step_infos: list[EnvironmentStep],
     ) -> None:
         """
         Handle registration (adding trainers and managers) of new behaviors ids.
@@ -261,7 +257,7 @@ class TrainerController:
         :param step_infos:
         :return:
         """
-        step_behavior_ids: Set[str] = set()
+        step_behavior_ids: set[str] = set()
         for s in step_infos:
             step_behavior_ids |= set(s.name_behavior_ids)
         new_behavior_ids = step_behavior_ids - self.registered_behavior_ids
@@ -276,10 +272,8 @@ class TrainerController:
         """
         self.kill_trainers = True
         for t in self.trainer_threads:
-            try:
+            with contextlib.suppress(Exception):
                 t.join(timeout_seconds)
-            except Exception:
-                pass
 
         with hierarchical_timer("trainer_threads") as main_timer_node:
             for trainer_thread in self.trainer_threads:

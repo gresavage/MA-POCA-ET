@@ -1,1 +1,1 @@
-from mapoca.trainers.optimizer.optimizer import Optimizer  # noqa
+from mapoca.trainers.optimizer.optimizer import Optimizer as Optimizer  # noqa: PLC0414

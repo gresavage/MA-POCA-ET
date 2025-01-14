@@ -1,26 +1,22 @@
+
 import numpy as np
-from typing import Dict
-from mapoca.torch_utils import torch
 
-from mapoca.trainers.buffer import AgentBuffer
-from mapoca.trainers.torch.components.reward_providers.base_reward_provider import (
-    BaseRewardProvider,
-)
-from mapoca.trainers.settings import RNDSettings
-
-from mlagents_envs.base_env import BehaviorSpec
 from mlagents_envs import logging_util
-from mapoca.trainers.torch.utils import ModelUtils
+from mlagents_envs.base_env import BehaviorSpec
+
+from mapoca.torch_utils import torch
+from mapoca.trainers.buffer import AgentBuffer
+from mapoca.trainers.settings import RNDSettings
+from mapoca.trainers.torch.components.reward_providers.base_reward_provider import BaseRewardProvider
 from mapoca.trainers.torch.networks import NetworkBody
+from mapoca.trainers.torch.utils import ModelUtils
 from mapoca.trainers.trajectory import ObsUtil
 
 logger = logging_util.get_logger(__name__)
 
 
 class RNDRewardProvider(BaseRewardProvider):
-    """
-    Implementation of Random Network Distillation : https://arxiv.org/pdf/1810.12894.pdf
-    """
+    """Implementation of Random Network Distillation : https://arxiv.org/pdf/1810.12894.pdf."""
 
     def __init__(self, specs: BehaviorSpec, settings: RNDSettings) -> None:
         super().__init__(specs, settings)
@@ -28,7 +24,7 @@ class RNDRewardProvider(BaseRewardProvider):
         self._random_network = RNDNetwork(specs, settings)
         self._training_network = RNDNetwork(specs, settings)
         self.optimizer = torch.optim.Adam(
-            self._training_network.parameters(), lr=settings.learning_rate
+            self._training_network.parameters(), lr=settings.learning_rate,
         )
 
     def evaluate(self, mini_batch: AgentBuffer) -> np.ndarray:
@@ -38,7 +34,7 @@ class RNDRewardProvider(BaseRewardProvider):
             rewards = torch.sum((prediction - target) ** 2, dim=1)
         return rewards.detach().cpu().numpy()
 
-    def update(self, mini_batch: AgentBuffer) -> Dict[str, np.ndarray]:
+    def update(self, mini_batch: AgentBuffer) -> dict[str, np.ndarray]:
         with torch.no_grad():
             target = self._random_network(mini_batch)
         prediction = self._training_network(mini_batch)
@@ -64,7 +60,7 @@ class RNDNetwork(torch.nn.Module):
         if state_encoder_settings.memory is not None:
             state_encoder_settings.memory = None
             logger.warning(
-                "memory was specified in network_settings but is not supported by RND. It is being ignored."
+                "memory was specified in network_settings but is not supported by RND. It is being ignored.",
             )
 
         self._encoder = NetworkBody(specs.observation_specs, state_encoder_settings)

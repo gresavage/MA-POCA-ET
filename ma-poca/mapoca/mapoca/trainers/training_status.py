@@ -1,12 +1,16 @@
-from typing import Dict, Any
-from enum import Enum
-from collections import defaultdict
 import json
+
+from collections import defaultdict
+from enum import Enum
+from pathlib import Path
+from typing import Any
+
 import attr
 import cattr
 
-from mapoca.torch_utils import torch
 from mlagents_envs.logging_util import get_logger
+
+from mapoca.torch_utils import torch
 from mapoca.trainers import __version__
 from mapoca.trainers.exception import TrainerError
 
@@ -29,11 +33,11 @@ class StatusMetaData:
     mlagents_version: str = __version__
     torch_version: str = torch.__version__
 
-    def to_dict(self) -> Dict[str, str]:
+    def to_dict(self) -> dict[str, str]:
         return cattr.unstructure(self)
 
     @staticmethod
-    def from_dict(import_dict: Dict[str, str]) -> "StatusMetaData":
+    def from_dict(import_dict: dict[str, str]) -> "StatusMetaData":
         return cattr.structure(import_dict, StatusMetaData)
 
     def check_compatibility(self, other: "StatusMetaData") -> None:
@@ -44,11 +48,11 @@ class StatusMetaData:
         # This should cover all stats version mismatches as well.
         if self.mlagents_version != other.mlagents_version:
             logger.warning(
-                "Checkpoint was loaded from a different version of ML-Agents. Some things may not resume properly."
+                "Checkpoint was loaded from a different version of ML-Agents. Some things may not resume properly.",
             )
         if self.torch_version != other.torch_version:
             logger.warning(
-                "PyTorch checkpoint was saved with a different version of PyTorch. Model may not resume properly."
+                "PyTorch checkpoint was saved with a different version of PyTorch. Model may not resume properly.",
             )
 
 
@@ -59,7 +63,7 @@ class GlobalTrainingStatus:
     cannot/should not be captured in a model checkpoint, such as curriclum lesson.
     """
 
-    saved_state: Dict[str, Dict[str, Any]] = defaultdict(lambda: {})
+    saved_state: dict[str, dict[str, Any]] = defaultdict(dict)  # noqa: RUF012
 
     @staticmethod
     def load_state(path: str) -> None:
@@ -68,21 +72,21 @@ class GlobalTrainingStatus:
         :param path: Path to the JSON file containing the state.
         """
         try:
-            with open(path) as f:
+            with Path(path).open("r", encoding="utf-8") as f:
                 loaded_dict = json.load(f)
             # Compare the metadata
-            _metadata = loaded_dict[StatusType.STATS_METADATA.value]
-            StatusMetaData.from_dict(_metadata).check_compatibility(StatusMetaData())
+            metadata = loaded_dict[StatusType.STATS_METADATA.value]
+            StatusMetaData.from_dict(metadata).check_compatibility(StatusMetaData())
             # Update saved state.
             GlobalTrainingStatus.saved_state.update(loaded_dict)
         except FileNotFoundError:
             logger.warning(
-                "Training status file not found. Not all functions will resume properly."
+                "Training status file not found. Not all functions will resume properly.",
             )
-        except KeyError:
+        except KeyError as err:
             raise TrainerError(
-                "Metadata not found, resuming from an incompatible version of ML-Agents."
-            )
+                "Metadata not found, resuming from an incompatible version of ML-Agents.",
+            ) from err
 
     @staticmethod
     def save_state(path: str) -> None:
@@ -90,10 +94,8 @@ class GlobalTrainingStatus:
         Save a JSON file that contains saved state.
         :param path: Path to the JSON file containing the state.
         """
-        GlobalTrainingStatus.saved_state[
-            StatusType.STATS_METADATA.value
-        ] = StatusMetaData().to_dict()
-        with open(path, "w") as f:
+        GlobalTrainingStatus.saved_state[StatusType.STATS_METADATA.value] = StatusMetaData().to_dict()
+        with Path(path).open("w", encoding="utf-8") as f:
             json.dump(GlobalTrainingStatus.saved_state, f, indent=4)
 
     @staticmethod

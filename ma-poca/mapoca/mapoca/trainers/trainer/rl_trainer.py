@@ -1,63 +1,61 @@
 # # Unity ML-Agents Toolkit
-from typing import Dict, List, Optional
-from collections import defaultdict
 import abc
 import time
-import attr
-import numpy as np
-from mlagents_envs.side_channel.stats_side_channel import StatsAggregationMethod
 
-from mapoca.trainers.policy.checkpoint_manager import (
-    ModelCheckpoint,
-    ModelCheckpointManager,
-)
-from mlagents_envs.logging_util import get_logger
-from mlagents_envs.timers import timed
-from mapoca.trainers.optimizer import Optimizer
-from mapoca.trainers.buffer import AgentBuffer, BufferKey
-from mapoca.trainers.trainer import Trainer
-from mapoca.trainers.torch.components.reward_providers.base_reward_provider import (
-    BaseRewardProvider,
-)
-from mlagents_envs.timers import hierarchical_timer
+from collections import defaultdict
+from typing import Optional
+
+import numpy as np
+
+import attr
+
 from mlagents_envs.base_env import BehaviorSpec
+from mlagents_envs.logging_util import get_logger
+from mlagents_envs.side_channel.stats_side_channel import StatsAggregationMethod
+from mlagents_envs.timers import hierarchical_timer, timed
+
+from mapoca.trainers.agent_processor import AgentManagerQueue
+from mapoca.trainers.behavior_id_utils import BehaviorIdentifiers
+from mapoca.trainers.buffer import AgentBuffer, BufferKey
+from mapoca.trainers.model_saver.model_saver import BaseModelSaver
+from mapoca.trainers.model_saver.torch_model_saver import TorchModelSaver
+from mapoca.trainers.optimizer import Optimizer
+from mapoca.trainers.policy.checkpoint_manager import ModelCheckpoint, ModelCheckpointManager
 from mapoca.trainers.policy.policy import Policy
 from mapoca.trainers.policy.torch_policy import TorchPolicy
-from mapoca.trainers.model_saver.torch_model_saver import TorchModelSaver
-from mapoca.trainers.behavior_id_utils import BehaviorIdentifiers
-from mapoca.trainers.agent_processor import AgentManagerQueue
-from mapoca.trainers.trajectory import Trajectory
 from mapoca.trainers.settings import TrainerSettings
 from mapoca.trainers.stats import StatsPropertyType
-from mapoca.trainers.model_saver.model_saver import BaseModelSaver
-
+from mapoca.trainers.torch.components.reward_providers.base_reward_provider import BaseRewardProvider
+from mapoca.trainers.trainer import Trainer
+from mapoca.trainers.trajectory import Trajectory
 
 logger = get_logger(__name__)
 
 
 class RLTrainer(Trainer):
-    """
-    This class is the base class for trainers that use Reward Signals.
-    """
+    """This class is the base class for trainers that use Reward Signals."""
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         # collected_rewards is a dictionary from name of reward signal to a dictionary of agent_id to cumulative reward
         # used for reporting only. We always want to report the environment reward to Tensorboard, regardless
         # of what reward signals are actually present.
-        self.cumulative_returns_since_policy_update: List[float] = []
-        self.collected_rewards: Dict[str, Dict[str, int]] = {
-            "environment": defaultdict(lambda: 0)
+        self.cumulative_returns_since_policy_update: list[float] = []
+        self.collected_rewards: dict[str, dict[str, int]] = {
+            "environment": defaultdict(lambda: 0),
         }
         self.update_buffer: AgentBuffer = AgentBuffer()
         self._stats_reporter.add_property(
-            StatsPropertyType.HYPERPARAMETERS, self.trainer_settings.as_dict()
+            StatsPropertyType.HYPERPARAMETERS,
+            self.trainer_settings.as_dict(),
         )
 
         self._next_save_step = 0
         self._next_summary_step = 0
         self.model_saver = self.create_model_saver(
-            self.trainer_settings, self.artifact_path, self.load
+            self.trainer_settings,
+            self.artifact_path,
+            self.load,
         )
         self._has_warned_group_rewards = False
 
@@ -79,7 +77,7 @@ class RLTrainer(Trainer):
                     aggregation=StatsAggregationMethod.HISTOGRAM,
                 )
                 self.cumulative_returns_since_policy_update.append(
-                    rewards.get(agent_id, 0)
+                    rewards.get(agent_id, 0),
                 )
                 self.reward_buffer.appendleft(rewards.get(agent_id, 0))
                 rewards[agent_id] = 0
@@ -97,16 +95,14 @@ class RLTrainer(Trainer):
                 rewards[agent_id] = 0
 
     def _clear_update_buffer(self) -> None:
-        """
-        Clear the buffers that have been built up during inference.
-        """
+        """Clear the buffers that have been built up during inference."""
         self.update_buffer.reset_agent()
 
     @abc.abstractmethod
     def _is_ready_update(self):
         """
         Returns whether or not the trainer has enough elements to run update model
-        :return: A boolean corresponding to wether or not update_model() can be run
+        :return: A boolean corresponding to wether or not update_model() can be run.
         """
         return False
 
@@ -120,42 +116,42 @@ class RLTrainer(Trainer):
 
     @abc.abstractmethod
     def create_torch_policy(
-        self, parsed_behavior_id: BehaviorIdentifiers, behavior_spec: BehaviorSpec
+        self,
+        parsed_behavior_id: BehaviorIdentifiers,
+        behavior_spec: BehaviorSpec,
     ) -> TorchPolicy:
-        """
-        Create a Policy object that uses the PyTorch backend.
-        """
-        pass
+        """Create a Policy object that uses the PyTorch backend."""
 
     @staticmethod
     def create_model_saver(
-        trainer_settings: TrainerSettings, model_path: str, load: bool
+        trainer_settings: TrainerSettings,
+        model_path: str,
+        load: bool,
     ) -> BaseModelSaver:
-        model_saver = TorchModelSaver(  # type: ignore
-            trainer_settings, model_path, load
+        return TorchModelSaver(  # type: ignore[return-value]
+            trainer_settings,
+            model_path,
+            load,
         )
-        return model_saver
 
     def _policy_mean_reward(self) -> Optional[float]:
-        """ Returns the mean episode reward for the current policy. """
+        """Returns the mean episode reward for the current policy."""
         rewards = self.cumulative_returns_since_policy_update
         if len(rewards) == 0:
             return None
-        else:
-            return sum(rewards) / len(rewards)
+        return sum(rewards) / len(rewards)
 
     @timed
     def _checkpoint(self) -> ModelCheckpoint:
-        """
-        Checkpoints the policy associated with this trainer.
-        """
+        """Checkpoints the policy associated with this trainer."""
         n_policies = len(self.policies.keys())
         if n_policies > 1:
             logger.warning(
-                "Trainer has multiple policies, but default behavior only saves the first."
+                "Trainer has multiple policies, but default behavior only saves the first.",
             )
         export_path, auxillary_paths = self.model_saver.save_checkpoint(
-            self.brain_name, self._step
+            self.brain_name,
+            self._step,
         )
         new_checkpoint = ModelCheckpoint(
             int(self._step),
@@ -165,18 +161,18 @@ class RLTrainer(Trainer):
             auxillary_file_paths=auxillary_paths,
         )
         ModelCheckpointManager.add_checkpoint(
-            self.brain_name, new_checkpoint, self.trainer_settings.keep_checkpoints
+            self.brain_name,
+            new_checkpoint,
+            self.trainer_settings.keep_checkpoints,
         )
         return new_checkpoint
 
     def save_model(self) -> None:
-        """
-        Saves the policy associated with this trainer.
-        """
+        """Saves the policy associated with this trainer."""
         n_policies = len(self.policies.keys())
         if n_policies > 1:
             logger.warning(
-                "Trainer has multiple policies, but default behavior only saves the first."
+                "Trainer has multiple policies, but default behavior only saves the first.",
             )
         elif n_policies == 0:
             logger.warning("Trainer has no policies, not saving anything.")
@@ -186,7 +182,8 @@ class RLTrainer(Trainer):
         self.model_saver.copy_final_model(model_checkpoint.file_path)
         export_ext = "onnx"
         final_checkpoint = attr.evolve(
-            model_checkpoint, file_path=f"{self.model_saver.model_path}.{export_ext}"
+            model_checkpoint,
+            file_path=f"{self.model_saver.model_path}.{export_ext}",
         )
         ModelCheckpointManager.track_final_checkpoint(self.brain_name, final_checkpoint)
 
@@ -196,17 +193,16 @@ class RLTrainer(Trainer):
         Uses demonstration_buffer to update model.
         :return: Whether or not the policy was updated.
         """
-        pass
 
     def _increment_step(self, n_steps: int, name_behavior_id: str) -> None:
         """
         Increment the step count of the trainer
-        :param n_steps: number of steps to increment the step count by
+        :param n_steps: number of steps to increment the step count by.
         """
         self._step += n_steps
         self._next_summary_step = self._get_next_interval_step(self.summary_freq)
         self._next_save_step = self._get_next_interval_step(
-            self.trainer_settings.checkpoint_interval
+            self.trainer_settings.checkpoint_interval,
         )
         p = self.get_policy(name_behavior_id)
         if p:
@@ -221,9 +217,7 @@ class RLTrainer(Trainer):
         return self._step + (interval - self._step % interval)
 
     def _write_summary(self, step: int) -> None:
-        """
-        Saves training statistics to Tensorboard.
-        """
+        """Saves training statistics to Tensorboard."""
         self.stats_reporter.add_stat("Is Training", float(self.should_still_train))
         self.stats_reporter.write_stats(int(step))
 
@@ -260,7 +254,8 @@ class RLTrainer(Trainer):
                 else 1
             )
             agentbuffer_trajectory.resequence_and_append(
-                self.update_buffer, training_length=seq_len
+                self.update_buffer,
+                training_length=seq_len,
             )
 
     def _maybe_save_model(self, step_after_process: int) -> None:
@@ -271,22 +266,19 @@ class RLTrainer(Trainer):
         """
         if self._next_save_step == 0:  # Don't save the first one
             self._next_save_step = self._get_next_interval_step(
-                self.trainer_settings.checkpoint_interval
+                self.trainer_settings.checkpoint_interval,
             )
         if step_after_process >= self._next_save_step and self.get_step != 0:
             self._checkpoint()
 
     def _warn_if_group_reward(self, buffer: AgentBuffer) -> None:
-        """
-        Warn if the trainer receives a Group Reward but isn't a multiagent trainer (e.g. POCA).
-        """
-        if not self._has_warned_group_rewards:
-            if np.any(buffer[BufferKey.GROUP_REWARD]):
-                logger.warning(
-                    "An agent recieved a Group Reward, but you are not using a multi-agent trainer. "
-                    "Please use the POCA trainer for best results."
-                )
-                self._has_warned_group_rewards = True
+        """Warn if the trainer receives a Group Reward but isn't a multiagent trainer (e.g. POCA)."""
+        if not self._has_warned_group_rewards and np.any(buffer[BufferKey.GROUP_REWARD]):
+            logger.warning(
+                "An agent recieved a Group Reward, but you are not using a multi-agent trainer. "
+                "Please use the POCA trainer for best results.",
+            )
+            self._has_warned_group_rewards = True
 
     def advance(self) -> None:
         """
@@ -298,21 +290,20 @@ class RLTrainer(Trainer):
                 # We grab at most the maximum length of the queue.
                 # This ensures that even if the queue is being filled faster than it is
                 # being emptied, the trajectories in the queue are on-policy.
-                _queried = False
+                queried = False
                 for _ in range(traj_queue.qsize()):
-                    _queried = True
+                    queried = True
                     try:
                         t = traj_queue.get_nowait()
                         self._process_trajectory(t)
                     except AgentManagerQueue.Empty:
                         break
-                if self.threaded and not _queried:
+                if self.threaded and not queried:
                     # Yield thread to avoid busy-waiting
                     time.sleep(0.0001)
-        if self.should_still_train:
-            if self._is_ready_update():
-                with hierarchical_timer("_update_policy"):
-                    if self._update_policy():
-                        for q in self.policy_queues:
-                            # Get policies that correspond to the policy queue in question
-                            q.put(self.get_policy(q.behavior_id))
+        if self.should_still_train and self._is_ready_update():
+            with hierarchical_timer("_update_policy"):
+                if self._update_policy():
+                    for q in self.policy_queues:
+                        # Get policies that correspond to the policy queue in question
+                        q.put(self.get_policy(q.behavior_id))

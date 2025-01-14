@@ -1,18 +1,20 @@
-from typing import Set, Dict, Any, TextIO
-import os
-import yaml
-from mapoca.trainers.exception import TrainerConfigError
-from mlagents_envs.environment import UnityEnvironment
 import argparse
+
+from pathlib import Path
+from typing import Any, TextIO
+
+import yaml
+
 from mlagents_envs import logging_util
+from mlagents_envs.environment import UnityEnvironment
+
+from mapoca.trainers.exception import TrainerConfigError
 
 logger = logging_util.get_logger(__name__)
 
 
 class RaiseRemovedWarning(argparse.Action):
-    """
-    Internal custom Action to raise warning when argument is called.
-    """
+    """Internal custom Action to raise warning when argument is called."""
 
     def __init__(self, nargs=0, **kwargs):
         super().__init__(nargs=nargs, **kwargs)
@@ -22,11 +24,9 @@ class RaiseRemovedWarning(argparse.Action):
 
 
 class DetectDefault(argparse.Action):
-    """
-    Internal custom Action to help detect arguments that aren't default.
-    """
+    """Internal custom Action to help detect arguments that aren't default."""
 
-    non_default_args: Set[str] = set()
+    non_default_args: set[str] = set()  # noqa: RUF012
 
     def __call__(self, arg_parser, namespace, values, option_string=None):
         setattr(namespace, self.dest, values)
@@ -62,10 +62,13 @@ class StoreConfigFile(argparse.Action):
 
 def _create_parser() -> argparse.ArgumentParser:
     argparser = argparse.ArgumentParser(
-        formatter_class=argparse.ArgumentDefaultsHelpFormatter
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     argparser.add_argument(
-        "trainer_config_path", action=StoreConfigFile, nargs="?", default=None
+        "trainer_config_path",
+        action=StoreConfigFile,
+        nargs="?",
+        default=None,
     )
     argparser.add_argument(
         "--env",
@@ -157,8 +160,7 @@ def _create_parser() -> argparse.ArgumentParser:
         "--num-envs",
         default=1,
         type=int,
-        help="The number of concurrent Unity environment instances to collect experiences "
-        "from when training",
+        help="The number of concurrent Unity environment instances to collect experiences from when training",
         action=DetectDefault,
     )
     argparser.add_argument(
@@ -201,48 +203,42 @@ def _create_parser() -> argparse.ArgumentParser:
         "--width",
         default=84,
         type=int,
-        help="The width of the executable window of the environment(s) in pixels "
-        "(ignored for editor training).",
+        help="The width of the executable window of the environment(s) in pixels (ignored for editor training).",
         action=DetectDefault,
     )
     eng_conf.add_argument(
         "--height",
         default=84,
         type=int,
-        help="The height of the executable window of the environment(s) in pixels "
-        "(ignored for editor training)",
+        help="The height of the executable window of the environment(s) in pixels (ignored for editor training)",
         action=DetectDefault,
     )
     eng_conf.add_argument(
         "--quality-level",
         default=5,
         type=int,
-        help="The quality level of the environment(s). Equivalent to calling "
-        "QualitySettings.SetQualityLevel in Unity.",
+        help="The quality level of the environment(s). Equivalent to calling QualitySettings.SetQualityLevel in Unity.",
         action=DetectDefault,
     )
     eng_conf.add_argument(
         "--time-scale",
         default=20,
         type=float,
-        help="The time scale of the Unity environment(s). Equivalent to setting "
-        "Time.timeScale in Unity.",
+        help="The time scale of the Unity environment(s). Equivalent to setting Time.timeScale in Unity.",
         action=DetectDefault,
     )
     eng_conf.add_argument(
         "--target-frame-rate",
         default=-1,
         type=int,
-        help="The target frame rate of the Unity environment(s). Equivalent to setting "
-        "Application.targetFrameRate in Unity.",
+        help="The target frame rate of the Unity environment(s). Equivalent to setting Application.targetFrameRate in Unity.",
         action=DetectDefault,
     )
     eng_conf.add_argument(
         "--capture-frame-rate",
         default=60,
         type=int,
-        help="The capture frame rate of the Unity environment(s). Equivalent to setting "
-        "Time.captureFramerate in Unity.",
+        help="The capture frame rate of the Unity environment(s). Equivalent to setting Time.captureFramerate in Unity.",
         action=DetectDefault,
     )
     eng_conf.add_argument(
@@ -264,30 +260,27 @@ def _create_parser() -> argparse.ArgumentParser:
     return argparser
 
 
-def load_config(config_path: str) -> Dict[str, Any]:
+def load_config(config_path: str) -> dict[str, Any]:
     try:
-        with open(config_path) as data_file:
+        with Path(config_path).open("r", encoding="utf-8") as data_file:
             return _load_config(data_file)
-    except OSError:
-        abs_path = os.path.abspath(config_path)
-        raise TrainerConfigError(f"Config file could not be found at {abs_path}.")
-    except UnicodeDecodeError:
+    except OSError as err:
+        abs_path = Path(config_path).absolute()
+        raise TrainerConfigError(f"Config file could not be found at {abs_path}.") from err
+    except UnicodeDecodeError as err:
         raise TrainerConfigError(
-            f"There was an error decoding Config file from {config_path}. "
-            f"Make sure your file is save using UTF-8"
-        )
+            f"There was an error decoding Config file from {config_path}. Make sure your file is save using UTF-8",
+        ) from err
 
 
-def _load_config(fp: TextIO) -> Dict[str, Any]:
-    """
-    Load the yaml config from the file-like object.
-    """
+def _load_config(fp: TextIO) -> dict[str, Any]:
+    """Load the yaml config from the file-like object."""
     try:
         return yaml.safe_load(fp)
     except yaml.parser.ParserError as e:
         raise TrainerConfigError(
             "Error parsing yaml file. Please check for formatting errors. "
-            "A tool such as http://www.yamllint.com/ can be helpful with this."
+            "A tool such as http://www.yamllint.com/ can be helpful with this.",
         ) from e
 
 

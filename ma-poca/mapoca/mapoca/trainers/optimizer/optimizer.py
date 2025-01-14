@@ -1,5 +1,4 @@
 import abc
-from typing import Dict
 
 from mapoca.trainers.buffer import AgentBuffer
 
@@ -14,11 +13,10 @@ class Optimizer(abc.ABC):
         self.reward_signals = {}
 
     @abc.abstractmethod
-    def update(self, batch: AgentBuffer, num_sequences: int) -> Dict[str, float]:
+    def update(self, batch: AgentBuffer, num_sequences: int) -> dict[str, float]:
         """
         Update the Policy based on the batch that was passed in.
         :param batch: AgentBuffer that contains the minibatch of data used for this update.
         :param num_sequences: Number of recurrent sequences found in the minibatch.
-        :return: A Dict containing statistics (name, value) from the update (e.g. loss)
+        :return: A Dict containing statistics (name, value) from the update (e.g. loss).
         """
-        pass
