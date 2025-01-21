@@ -233,7 +233,7 @@ class PPOTrainer(RLTrainer):
         return TorchPPOOptimizer(  # type: ignore[return-value]
             cast("TorchPolicy", self.policy),
             self.trainer_settings,  # type: ignore[arg-type]
-        )  # type: ignore
+        )
 
     def add_policy(
         self,

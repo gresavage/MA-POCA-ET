@@ -43,11 +43,13 @@ class TorchPolicy(Policy):
         or a clipped output.
         """
         super().__init__(
-            seed, behavior_spec, trainer_settings, tanh_squash, condition_sigma_on_obs,
+            seed,
+            behavior_spec,
+            trainer_settings,
+            tanh_squash,
+            condition_sigma_on_obs,
         )
-        self.global_step = (
-            GlobalSteps()
-        )  # could be much simpler if TorchPolicy is nn.Module
+        self.global_step = GlobalSteps()  # could be much simpler if TorchPolicy is nn.Module
         self.grads = None
 
         self.stats_name_to_update_name = {
@@ -65,9 +67,7 @@ class TorchPolicy(Policy):
             self.shared_critic = False
         else:
             reward_signal_configs = trainer_settings.reward_signals
-            reward_signal_names = [
-                key.value for key, _ in reward_signal_configs.items()
-            ]
+            reward_signal_names = [key.value for key, _ in reward_signal_configs.items()]
             self.actor = SharedActorCritic(
                 observation_specs=self.behavior_spec.observation_specs,
                 network_settings=trainer_settings.network_settings,
@@ -130,7 +130,10 @@ class TorchPolicy(Policy):
         :return: Tuple of AgentAction, ActionLogProbs, entropies, and output memories.
         """
         actions, log_probs, entropies, memories = self.actor.get_action_and_stats(
-            obs, masks, memories, seq_len,
+            obs,
+            masks,
+            memories,
+            seq_len,
         )
         return (actions, log_probs, entropies, memories)
 
@@ -143,13 +146,19 @@ class TorchPolicy(Policy):
         seq_len: int = 1,
     ) -> tuple[ActionLogProbs, torch.Tensor]:
         log_probs, entropies = self.actor.get_stats(
-            obs, actions, masks, memories, seq_len,
+            obs,
+            actions,
+            masks,
+            memories,
+            seq_len,
         )
         return log_probs, entropies
 
     @timed
     def evaluate(
-        self, decision_requests: DecisionSteps, global_agent_ids: list[str],
+        self,
+        decision_requests: DecisionSteps,
+        global_agent_ids: list[str],
     ) -> dict[str, Any]:
         """
         Evaluates policy for the agent experiences provided.
@@ -161,15 +170,11 @@ class TorchPolicy(Policy):
         masks = self._extract_masks(decision_requests)
         tensor_obs = [torch.as_tensor(np_ob) for np_ob in obs]
 
-        memories = torch.as_tensor(self.retrieve_memories(global_agent_ids)).unsqueeze(
-            0,
-        )
+        memories = torch.as_tensor(self.retrieve_memories(global_agent_ids)).unsqueeze(0)
 
         run_out = {}
         with torch.no_grad():
-            action, log_probs, entropy, memories = self.sample_actions(
-                tensor_obs, masks=masks, memories=memories,
-            )
+            action, log_probs, entropy, memories = self.sample_actions(tensor_obs, masks=masks, memories=memories)
         action_tuple = action.to_action_tuple()
         run_out["action"] = action_tuple
         # This is the clipped action which is not saved to the buffer
@@ -184,7 +189,9 @@ class TorchPolicy(Policy):
         return run_out
 
     def get_action(
-        self, decision_requests: DecisionSteps, worker_id: int = 0,
+        self,
+        decision_requests: DecisionSteps,
+        worker_id: int = 0,
     ) -> ActionInfo:
         """
         Decides actions given observations information, and takes them in environment.
@@ -197,8 +204,7 @@ class TorchPolicy(Policy):
             return ActionInfo.empty()
 
         global_agent_ids = [
-            get_global_agent_id(worker_id, int(agent_id))
-            for agent_id in decision_requests.agent_id
+            get_global_agent_id(worker_id, int(agent_id)) for agent_id in decision_requests.agent_id
         ]  # For 1-D array, the iterator order is correct.
 
         run_out = self.evaluate(decision_requests, global_agent_ids)

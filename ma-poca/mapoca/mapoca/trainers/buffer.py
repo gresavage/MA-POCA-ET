@@ -393,7 +393,7 @@ class AgentBuffer(MutableMapping):
         mini_batch = AgentBuffer()
         for key, field in self._fields.items():
             # slicing AgentBufferField returns a List[Any}
-            mini_batch[key] = field[start:end]  # type: ignore
+            mini_batch[key] = field[start:end]
         return mini_batch
 
     def sample_mini_batch(

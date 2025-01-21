@@ -16,7 +16,7 @@ from mapoca.trainers.torch.action_log_probs import ActionLogProbs
 from mapoca.trainers.torch.agent_action import AgentAction
 from mapoca.trainers.torch.components.reward_providers.extrinsic_reward_provider import ExtrinsicRewardProvider
 from mapoca.trainers.torch.decoders import ValueHeads
-from mapoca.trainers.torch.networks import Critic, MultiAgentNetworkBody
+from mapoca.trainers.torch.networks import Critic, MultiAgentMIR3Body, MultiAgentNetworkBody
 from mapoca.trainers.torch.utils import ModelUtils
 from mapoca.trainers.trajectory import GroupObsUtil, ObsUtil
 
@@ -650,6 +650,344 @@ class TorchPOCAOptimizer(TorchOptimizer):
         )
 
 
+class TorchMIR3POCAOptimizer(TorchPOCAOptimizer):
+    def __init__(self, policy: TorchPolicy, trainer_settings: TrainerSettings):
+        """
+        Takes a Policy and a Dict of trainer parameters and creates an Optimizer around the policy.
+        :param policy: A TorchPolicy object that will be updated by this POCA Optimizer.
+        :param trainer_params: Trainer parameters dictionary that specifies the
+        properties of the trainer.
+        """
+        # Create the graph here to give more granular control of the TF graph to the Optimizer.
+
+        super().__init__(policy, trainer_settings)
+
+        if self.hyperparameters.enable_mir:
+            self._club = MultiAgentMIR3Body(
+                policy.behavior_spec.observation_specs,
+                trainer_settings.network_settings,
+                policy.behavior_spec.action_spec,
+            )
+            self._club.to(default_device())
+
+            self.optimizer.add_param_group({"params": list(self.club.parameters())})
+
+            self.decay_mi_beta = ModelUtils.DecayedValue(
+                self.hyperparameters.learning_rate_schedule,
+                self.hyperparameters.mi_beta,
+                1e-5,
+                self.trainer_settings.max_steps,
+            )
+
+    @property
+    def club(self) -> MultiAgentMIR3Body:
+        return self._club
+
+    @timed
+    def update(self, batch: AgentBuffer, num_sequences: int) -> dict[str, float]:  # noqa: PLR0914
+        """
+        Performs update on model.
+        :param batch: Batch of experiences.
+        :param num_sequences: Number of sequences to process.
+        :return: Results of update.
+        """
+        # Get decayed parameters
+        decay_lr = self.decay_learning_rate.get_value(self.policy.get_current_step())
+        decay_eps = self.decay_epsilon.get_value(self.policy.get_current_step())
+        decay_bet = self.decay_beta.get_value(self.policy.get_current_step())
+        returns = {}
+        old_values = {}
+        old_baseline_values = {}
+        for name in self.reward_signals:
+            old_values[name] = ModelUtils.list_to_tensor(
+                batch[RewardSignalUtil.value_estimates_key(name)],
+            )
+            returns[name] = ModelUtils.list_to_tensor(
+                batch[RewardSignalUtil.returns_key(name)],
+            )
+            old_baseline_values[name] = ModelUtils.list_to_tensor(
+                batch[RewardSignalUtil.baseline_estimates_key(name)],
+            )
+
+        n_obs = len(self.policy.behavior_spec.observation_specs)
+        current_obs = ObsUtil.from_buffer(batch, n_obs)
+        # Convert to tensors
+        current_obs = [ModelUtils.list_to_tensor(obs) for obs in current_obs]
+        groupmate_obs = GroupObsUtil.from_buffer(batch, n_obs)
+        groupmate_obs = [[ModelUtils.list_to_tensor(obs) for obs in _groupmate_obs] for _groupmate_obs in groupmate_obs]
+
+        act_masks = ModelUtils.list_to_tensor(batch[BufferKey.ACTION_MASK])
+        actions = AgentAction.from_buffer(batch)
+        groupmate_actions = AgentAction.group_from_buffer(batch)
+
+        memories = [
+            ModelUtils.list_to_tensor(batch[BufferKey.MEMORY][i])
+            for i in range(0, len(batch[BufferKey.MEMORY]), self.policy.sequence_length)
+        ]
+        if len(memories) > 0:
+            memories = torch.stack(memories).unsqueeze(0)
+        value_memories = [
+            ModelUtils.list_to_tensor(batch[BufferKey.CRITIC_MEMORY][i])
+            for i in range(
+                0,
+                len(batch[BufferKey.CRITIC_MEMORY]),
+                self.policy.sequence_length,
+            )
+        ]
+
+        baseline_memories = [
+            ModelUtils.list_to_tensor(batch[BufferKey.BASELINE_MEMORY][i])
+            for i in range(
+                0,
+                len(batch[BufferKey.BASELINE_MEMORY]),
+                self.policy.sequence_length,
+            )
+        ]
+
+        if len(value_memories) > 0:
+            value_memories = torch.stack(value_memories).unsqueeze(0)
+            baseline_memories = torch.stack(baseline_memories).unsqueeze(0)
+
+        log_probs, entropy = self.policy.evaluate_actions(
+            current_obs,
+            masks=act_masks,
+            actions=actions,
+            memories=memories,
+            seq_len=self.policy.sequence_length,
+        )
+        all_obs = [current_obs, *groupmate_obs]
+        values, _ = self.critic.critic_pass(
+            all_obs,
+            memories=value_memories,
+            sequence_length=self.policy.sequence_length,
+        )
+        groupmate_obs_and_actions = (groupmate_obs, groupmate_actions)
+        baselines, _ = self.critic.baseline(
+            current_obs,
+            groupmate_obs_and_actions,
+            memories=baseline_memories,
+            sequence_length=self.policy.sequence_length,
+        )
+        old_log_probs = ActionLogProbs.from_buffer(batch).flatten()
+        log_probs = log_probs.flatten()
+        loss_masks = ModelUtils.list_to_tensor(batch[BufferKey.MASKS], dtype=torch.bool)
+
+        baseline_loss = ModelUtils.trust_region_value_loss(
+            baselines,
+            old_baseline_values,
+            returns,
+            decay_eps,
+            loss_masks,
+        )
+        value_loss = ModelUtils.trust_region_value_loss(
+            values,
+            old_values,
+            returns,
+            decay_eps,
+            loss_masks,
+        )
+        policy_loss = ModelUtils.trust_region_policy_loss(
+            ModelUtils.list_to_tensor(batch[BufferKey.ADVANTAGES]),
+            log_probs,
+            old_log_probs,
+            loss_masks,
+            decay_eps,
+        )
+
+        loss = policy_loss + 0.5 * (value_loss + 0.5 * baseline_loss) - decay_bet * ModelUtils.masked_mean(entropy, loss_masks)
+
+        # Set optimizer learning rate
+        ModelUtils.update_learning_rate(self.optimizer, decay_lr)
+        self.optimizer.zero_grad()
+        loss.backward()
+
+        self.optimizer.step()
+        update_stats = {
+            # NOTE: abs() is not technically correct, but matches the behavior in TensorFlow.
+            # TODO: After PyTorch is default, change to something more correct.
+            "Losses/Policy Loss": torch.abs(policy_loss).item(),
+            "Losses/Value Loss": value_loss.item(),
+            "Losses/Baseline Loss": baseline_loss.item(),
+            "Policy/Learning Rate": decay_lr,
+            "Policy/Epsilon": decay_eps,
+            "Policy/Beta": decay_bet,
+        }
+
+        for reward_provider in self.reward_signals.values():
+            update_stats.update(reward_provider.update(batch))
+
+        return update_stats
+
+    def update_club(self, batch: AgentBuffer, num_sequences: int) -> dict[str, float]:
+        """
+        Performs update on model.
+        :param batch: Batch of experiences.
+        :param num_sequences: Number of sequences to process.
+        :return: Results of update.
+        """
+        # Get decayed parameters
+        returns = {}
+        old_values = {}
+        old_baseline_values = {}
+        for name in self.reward_signals:
+            old_values[name] = ModelUtils.list_to_tensor(
+                batch[RewardSignalUtil.value_estimates_key(name)],
+            )
+            returns[name] = ModelUtils.list_to_tensor(
+                batch[RewardSignalUtil.returns_key(name)],
+            )
+            old_baseline_values[name] = ModelUtils.list_to_tensor(
+                batch[RewardSignalUtil.baseline_estimates_key(name)],
+            )
+
+        n_obs = len(self.policy.behavior_spec.observation_specs)
+        current_obs = ObsUtil.from_buffer(batch, n_obs)
+        # Convert to tensors
+        current_obs = [ModelUtils.list_to_tensor(obs) for obs in current_obs]
+        groupmate_obs = GroupObsUtil.from_buffer(batch, n_obs)
+        groupmate_obs = [[ModelUtils.list_to_tensor(obs) for obs in _groupmate_obs] for _groupmate_obs in groupmate_obs]
+
+        actions = AgentAction.from_buffer(batch)
+        groupmate_actions = AgentAction.group_from_buffer(batch)
+        first_steps = ModelUtils.list_to_tensor(batch[BufferKey.STEP]) == 0
+
+        value_memories = []
+        baseline_memories = []
+        if self.policy.use_recurrent:
+            value_memories = [
+                ModelUtils.list_to_tensor(batch[BufferKey.CRITIC_MEMORY][i])
+                for i in range(
+                    0,
+                    len(batch[BufferKey.CRITIC_MEMORY]),
+                    self.policy.sequence_length,
+                )
+            ]
+
+            baseline_memories = [
+                ModelUtils.list_to_tensor(batch[BufferKey.BASELINE_MEMORY][i])
+                for i in range(
+                    0,
+                    len(batch[BufferKey.BASELINE_MEMORY]),
+                    self.policy.sequence_length,
+                )
+            ]
+
+            if len(value_memories) > 0:
+                value_memories = torch.stack(value_memories).unsqueeze(0)
+                baseline_memories = torch.stack(baseline_memories).unsqueeze(0)
+
+        all_obs = [current_obs, *groupmate_obs]
+        groupmate_obs_and_actions = (groupmate_obs, groupmate_actions)
+        loss_masks = ModelUtils.list_to_tensor(batch[BufferKey.MASKS], dtype=torch.bool)
+
+        club_loss = self.club.learning_loss(
+            obs_only=all_obs,
+            actions=actions,
+            loss_masks=loss_masks,
+            first_steps=first_steps,
+            memories=value_memories,
+            sequence_length=self.policy.sequence_length,
+        )
+
+        baseline_club_loss = self.club.baseline_loss(
+            current_obs,
+            groupmate_obs_and_actions,
+            actions=actions,
+            first_steps=first_steps,
+            loss_masks=loss_masks,
+            memories=baseline_memories,
+            sequence_length=self.policy.sequence_length,
+        )
+
+        loss = club_loss + 0.5 * baseline_club_loss
+
+        self.optimizer.zero_grad()
+        loss.backward()
+
+        self.optimizer.step()
+        return {
+            # NOTE: abs() is not technically correct, but matches the behavior in TensorFlow.
+            # TODO: After PyTorch is default, change to something more correct.
+            "Losses/Club Loss": club_loss.item(),
+            "Losses/Baseline Club Loss": baseline_club_loss.item(),
+        }
+
+    def get_trajectory_club_estimates(self, batch: AgentBuffer) -> tuple[np.ndarray, np.ndarray]:
+        n_obs = len(self.policy.behavior_spec.observation_specs)
+        current_obs = ObsUtil.from_buffer(batch, n_obs)
+        # Convert to tensors
+        current_obs = [ModelUtils.list_to_tensor(obs) for obs in current_obs]
+        groupmate_obs = GroupObsUtil.from_buffer(batch, n_obs)
+        groupmate_obs = [[ModelUtils.list_to_tensor(obs) for obs in _groupmate_obs] for _groupmate_obs in groupmate_obs]
+
+        actions = AgentAction.from_buffer(batch)
+        groupmate_actions = AgentAction.group_from_buffer(batch)
+        first_steps = ModelUtils.list_to_tensor(batch[BufferKey.STEP]) == 0
+
+        value_memories = []
+        baseline_memories = []
+        if self.policy.use_recurrent:
+            value_memories = [
+                ModelUtils.list_to_tensor(batch[BufferKey.CRITIC_MEMORY][i])
+                for i in range(
+                    0,
+                    len(batch[BufferKey.CRITIC_MEMORY]),
+                    self.policy.sequence_length,
+                )
+            ]
+
+            baseline_memories = [
+                ModelUtils.list_to_tensor(batch[BufferKey.BASELINE_MEMORY][i])
+                for i in range(
+                    0,
+                    len(batch[BufferKey.BASELINE_MEMORY]),
+                    self.policy.sequence_length,
+                )
+            ]
+
+        if len(value_memories) > 0:
+            value_memories = torch.stack(value_memories).unsqueeze(0)
+            baseline_memories = torch.stack(baseline_memories).unsqueeze(0)
+
+        all_obs = [current_obs, *groupmate_obs]
+        groupmate_obs_and_actions = (groupmate_obs, groupmate_actions)
+
+        with torch.no_grad():
+            club, _ = self.club.club(
+                obs=all_obs,
+                actions=actions,
+                first_steps=first_steps,
+                memories=value_memories,
+                sequence_length=self.policy.sequence_length,
+            )
+
+            club_baseline, _ = self.club.club_baseline(
+                obs_without_actions=current_obs,
+                obs_with_actions=groupmate_obs_and_actions,
+                actions=actions,
+                first_steps=first_steps,
+                memories=baseline_memories,
+                sequence_length=self.policy.sequence_length,
+            )
+
+        return ModelUtils.to_numpy(club), ModelUtils.to_numpy(club_baseline)
+
+    def update_buffer_club_values(self, batch: AgentBuffer) -> tuple[np.ndarray, np.ndarray]:
+        decay_mi_beta = self.decay_mi_beta.get_value(self.policy.get_current_step())
+        club, baseline_club = self.get_trajectory_club_estimates(batch)
+        club /= len(self.reward_signals)
+        baseline_club /= len(self.reward_signals)
+
+        for name in self.reward_signals:
+            batch[RewardSignalUtil.value_estimates_key(name)].set(
+                np.array(batch[RewardSignalUtil.value_estimates_key(name)].get_batch(), dtype=np.float32) - decay_mi_beta * club,
+            )
+        batch[BufferKey.ADVANTAGES].set(
+            np.array(batch[BufferKey.ADVANTAGES].get_batch(), dtype=np.float32) - decay_mi_beta * baseline_club,
+        )
+        return club.mean(), baseline_club.mean()
+
+
 class TorchETPOCAOptimizer(TorchPOCAOptimizer):
     class POCAValueNetwork(TorchPOCAOptimizer.POCAValueNetwork):
         """
@@ -801,7 +1139,7 @@ class TorchETPOCAOptimizer(TorchPOCAOptimizer):
         self.value_memory_dict: dict[str, torch.Tensor] = {}
         self.baseline_memory_dict: dict[str, torch.Tensor] = {}
 
-    def init_buffer_traces(self, batch: AgentBuffer, num_sequences: int, lambd: float) -> dict[str, float]:
+    def init_buffer_traces(self, batch: AgentBuffer, num_sequences: int, lambd: float) -> dict[str, float]:  # noqa: PLR0914
         """
         Performs update on model.
         :param batch: Batch of experiences.
@@ -946,7 +1284,7 @@ class TorchETPOCAOptimizer(TorchPOCAOptimizer):
                 chunk_start = chunk_end
 
     @timed
-    def update(self, batch: AgentBuffer, num_sequences: int, original_batch: AgentBuffer, lambd: float) -> dict[str, float]:
+    def update(self, batch: AgentBuffer, num_sequences: int, original_batch: AgentBuffer, lambd: float) -> dict[str, float]:  # noqa: PLR0912, PLR0914, PLR0915
         # def update(self, batch: AgentBuffer, num_sequences: int) -> dict[str, float]:
         """
         Performs update on model.

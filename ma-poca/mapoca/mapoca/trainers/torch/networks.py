@@ -1,7 +1,12 @@
 import abc
+import gc
 
+from collections import defaultdict
 from collections.abc import Callable
 from typing import Optional, Union
+
+import torchtune
+import torchtune.data
 
 from mlagents_envs.base_env import ActionSpec, ObservationSpec, ObservationType
 
@@ -12,11 +17,11 @@ from mapoca.trainers.settings import ConditioningType, EncoderType, NetworkSetti
 from mapoca.trainers.torch.action_log_probs import ActionLogProbs
 from mapoca.trainers.torch.action_model import ActionModel
 from mapoca.trainers.torch.agent_action import AgentAction
-from mapoca.trainers.torch.attention import EntityEmbedding, ResidualSelfAttention, get_zero_entities_mask
+from mapoca.trainers.torch.attention import EntityEmbedding, PositionalSelfAttention, ResidualSelfAttention, get_zero_entities_mask
 from mapoca.trainers.torch.conditioning import ConditionalEncoder
 from mapoca.trainers.torch.decoders import ValueHeads
 from mapoca.trainers.torch.encoders import VectorInput
-from mapoca.trainers.torch.layers import LSTM, Initialization, LinearEncoder
+from mapoca.trainers.torch.layers import LSTM, Initialization, LinearEncoder, linear_layer
 from mapoca.trainers.torch.utils import ModelUtils
 from mapoca.trainers.trajectory import ObsUtil
 
@@ -266,27 +271,26 @@ class MultiAgentNetworkBody(torch.nn.Module):
         obs_only_ent_size = self.observation_encoder.total_enc_size
         q_ent_size = obs_only_ent_size + sum(self.action_spec.discrete_branches) + self.action_spec.continuous_size
 
-        attention_embeding_size = self.h_size
+        attention_embedding_size = self.h_size
         self.obs_encoder = EntityEmbedding(
             obs_only_ent_size,
             None,
-            attention_embeding_size,
+            attention_embedding_size,
         )
         self.obs_action_encoder = EntityEmbedding(
             q_ent_size,
             None,
-            attention_embeding_size,
+            attention_embedding_size,
         )
 
-        self.self_attn = ResidualSelfAttention(attention_embeding_size)
+        self.self_attn = ResidualSelfAttention(attention_embedding_size)
 
         self.linear_encoder = LinearEncoder(
-            attention_embeding_size,
+            attention_embedding_size,
             network_settings.num_layers,
             self.h_size,
-            # kernel_gain=(0.125 / self.h_size) ** 0.5,
             kernel_init=Initialization.XavierGlorotNormal,
-            kernel_gain=0.67,
+            kernel_gain=(0.125 / self.h_size) ** 0.5,
         )
 
         if self.use_lstm:
@@ -734,3 +738,439 @@ class LearningRate(nn.Module):
         # TODO: add learning rate decay
         super().__init__()
         self.learning_rate = torch.Tensor([lr])
+
+
+class CLUBCategorical(nn.Module):
+    def __init__(self, x_dim: int, y_dim: int, hidden_size: int):
+        super().__init__()
+        self.varnet = nn.Sequential(
+            linear_layer(x_dim, hidden_size),
+            nn.ReLU(),
+            linear_layer(hidden_size, y_dim),
+        )
+
+    def forward(self, x_samples: torch.Tensor, y_samples: torch.Tensor) -> torch.Tensor:
+        # x_samples [sample_size, x_dim]  # noqa: ERA001
+        # y_samples [sample_size, y_dim]  # noqa: ERA001
+
+        logits = self.varnet(x_samples)
+
+        # log of conditional probability of positive sample pairs
+        sample_size, y_dim = logits.shape
+
+        logits_extend = logits.unsqueeze(1).repeat(1, sample_size, 1)
+        y_samples_extend = y_samples.unsqueeze(0).repeat(sample_size, 1, 1)
+
+        gc.collect()
+        torch.cuda.empty_cache()
+        # log of conditional probability of negative sample pairs
+        log_mat = -nn.functional.cross_entropy(
+            logits_extend.reshape(-1, y_dim),
+            y_samples_extend.reshape(-1, y_dim).argmax(dim=-1),
+            reduction="none",
+        )
+
+        log_mat = log_mat.reshape(sample_size, sample_size)
+        positive = torch.diag(log_mat)
+        negative = log_mat.mean(1)
+        return (positive - negative).mean(dim=-1, keepdim=True)
+
+    def loglikeli(self, x_samples: torch.Tensor, y_samples: torch.Tensor) -> torch.Tensor:
+        logits = self.varnet(x_samples)
+        return nn.functional.cross_entropy(logits, y_samples.argmax(dim=-1), reduction="none").neg()
+
+    def learning_loss(self, x_samples: torch.Tensor, y_samples: torch.Tensor) -> torch.Tensor:
+        return self.loglikeli(x_samples, y_samples).neg()
+
+
+class CLUBContinuous(nn.Module):
+    def __init__(self, x_dim: int, y_dim: int, hidden_size: int):
+        super().__init__()
+        # p_mu outputs mean of q(Y|X)
+        self.p_mu = nn.Sequential(linear_layer(x_dim, hidden_size // 2), nn.ReLU(), linear_layer(hidden_size // 2, y_dim))
+        # p_logvar outputs log of variance of q(Y|X)
+        self.p_logvar = nn.Sequential(linear_layer(x_dim, hidden_size // 2), nn.ReLU(), linear_layer(hidden_size // 2, y_dim), nn.Tanh())
+
+    def get_mu_logvar(self, x_samples: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+        mu = self.p_mu(x_samples)
+        logvar = self.p_logvar(x_samples)
+        return mu, logvar
+
+    def forward(self, x_samples: torch.Tensor, y_samples: torch.Tensor) -> torch.Tensor:
+        mu, logvar = self.get_mu_logvar(x_samples)
+
+        # log of conditional probability of positive sample pairs
+        positive = -((mu - y_samples) ** 2) / 2.0 / logvar.exp()
+
+        prediction_1 = mu.unsqueeze(1)
+        y_samples_1 = y_samples.unsqueeze(0)
+
+        # log of conditional probability of negative sample pairs
+        negative = -((y_samples_1 - prediction_1) ** 2).mean(1) / 2.0 / logvar.exp()
+
+        return (positive.sum(1) - negative.sum(1)).mean(dim=-1, keepdim=True)
+
+    def loglikeli(self, x_samples: torch.Tensor, y_samples: torch.Tensor) -> torch.Tensor:  # unnormalized loglikelihood
+        mu, logvar = self.get_mu_logvar(x_samples)
+        return (((mu - y_samples) ** 2).neg() / logvar.exp() - logvar).sum(1)
+
+    def learning_loss(self, x_samples: torch.Tensor, y_samples: torch.Tensor) -> torch.Tensor:
+        return self.loglikeli(x_samples, y_samples).neg()
+
+
+class MIR3Body(nn.Module):
+    def __init__(self, observation_specs: list[ObservationSpec], network_settings: NetworkSettings, action_spec: ActionSpec):
+        super().__init__()
+        self.action_spec = action_spec
+        self.version_number = torch.nn.Parameter(
+            torch.Tensor([self.MODEL_EXPORT_VERSION]),
+            requires_grad=False,
+        )
+        self.continuous_act_size_vector = torch.nn.Parameter(
+            torch.Tensor([int(self.action_spec.continuous_size)]),
+            requires_grad=False,
+        )
+        self.discrete_act_size_vector = torch.nn.Parameter(
+            torch.Tensor([self.action_spec.discrete_branches]),
+            requires_grad=False,
+        )
+        self.network_body = NetworkBody(observation_specs, network_settings)
+        if network_settings.memory is not None:
+            self.encoding_size = network_settings.memory.memory_size // 2
+        else:
+            self.encoding_size = network_settings.hidden_units
+        self.memory_size_vector = torch.nn.Parameter(
+            torch.Tensor([int(self.network_body.memory_size)]),
+            requires_grad=False,
+        )
+        self.continuous_club_head = None
+        self.discrete_club_head = None
+        if self.action_spec.continuous_size > 0:
+            self.continuous_club_head = CLUBContinuous(self.encoding_size, int(self.action_spec.continuous_size))
+        if self.action_spec.discrete_size > 0:
+            self.discrete_club_head = CLUBCategorical(self.encoding_size, sum(self.action_spec.discrete_branches))
+
+    def forward(
+        self,
+        inputs: list[torch.Tensor],
+        actions: list[AgentAction],
+        memories: Optional[torch.Tensor] = None,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        encoding, memories_out = self.network_body(
+            inputs,
+            memories=memories,
+            sequence_length=1,
+        )
+        continuous_club = None
+        discrete_club = None
+        if self.continuous_club_head is not None:
+            continuous_act = torch.stack([act.continuous_tensor for act in actions], dim=1)
+            continuous_club = self.continuous_club_head(encoding, continuous_act)
+        if self.discrete_club_head is not None:
+            discrete_act = torch.stack(
+                [torch.cat(ModelUtils.actions_to_onehot(act.discrete_list, self.action_spec.discrete_branches), dim=1) for act in actions],
+                dim=1,
+            )
+            discrete_club = self.discrete_club_head(encoding, discrete_act)
+
+        return continuous_club, discrete_club, memories_out
+
+
+class MultiAgentMIR3Body(nn.Module):
+    def __init__(
+        self,
+        observation_specs: list[ObservationSpec],
+        network_settings: NetworkSettings,
+        action_spec: ActionSpec,
+    ):
+        super().__init__()
+        self.network_body = MultiAgentNetworkBody(
+            observation_specs,
+            network_settings,
+            action_spec,
+        )
+        encoding_size = network_settings.memory.memory_size // 2 if network_settings.memory is not None else network_settings.hidden_units
+
+        self.continuous_club_head = None
+        self.discrete_club_head = None
+        self.obs_act_encoder = LinearEncoder(
+            2 * (encoding_size + 1)
+            + int(self.network_body.action_spec.continuous_size)
+            + sum(self.network_body.action_spec.discrete_branches),
+            network_settings.num_layers,
+            encoding_size,
+        )
+        if self.network_body.action_spec.continuous_size > 0:
+            self.continuous_club_head = CLUBContinuous(encoding_size, int(self.network_body.action_spec.continuous_size), encoding_size)
+        if self.network_body.action_spec.discrete_size > 0:
+            self.discrete_club_head = CLUBCategorical(
+                encoding_size,
+                sum(self.network_body.action_spec.discrete_branches),
+                encoding_size,
+            )
+        self.sequence_encoding_head = PositionalSelfAttention(encoding_size)
+
+    def _get_encoding(
+        self,
+        obs_only: list[list[torch.Tensor]],
+        actions: AgentAction,
+        first_steps: torch.Tensor,
+        memories: Optional[torch.Tensor] = None,
+        sequence_length: int = 1,
+    ) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
+        encoding, memories = self.network_body(
+            obs_only=obs_only,
+            obs=[],
+            actions=[],
+            memories=memories,
+            sequence_length=sequence_length,
+        )
+        return self._get_encoding_and_actions(
+            encoding=encoding,
+            actions=actions,
+            first_steps=first_steps,
+        )
+
+    def _get_baseline_encoding(
+        self,
+        obs_without_actions: list[torch.Tensor],
+        obs_with_actions: tuple[list[list[torch.Tensor]], list[AgentAction]],
+        actions: AgentAction,
+        first_steps: torch.Tensor,
+        memories: Optional[torch.Tensor] = None,
+        sequence_length: int = 1,
+    ) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
+        (obs, act) = obs_with_actions
+        encoding, memories = self.network_body(
+            obs_only=[obs_without_actions],
+            obs=obs,
+            actions=act,
+            memories=memories,
+            sequence_length=sequence_length,
+        )
+        return self._get_encoding_and_actions(
+            encoding=encoding,
+            actions=actions,
+            first_steps=first_steps,
+        )
+
+    def _get_encoding_and_actions(
+        self,
+        encoding: torch.Tensor,
+        actions: AgentAction,
+        first_steps: torch.Tensor,
+    ) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
+        discrete_act = torch.cat(
+            ModelUtils.actions_to_onehot(actions.discrete_tensor, self.network_body.action_spec.discrete_branches),
+            dim=1,
+        )
+
+        encoding = self.obs_act_encoder(
+            torch.cat([encoding[:-1], actions.to_flat(self.network_body.action_spec.discrete_branches)[:-1], encoding[1:]], dim=-1),
+        )
+        episodes = torch.argwhere(torch.cat([first_steps, torch.ones(1, dtype=first_steps.dtype, device=first_steps.device)]))
+        episode_lengths = episodes[1:] - episodes[:-1]
+        encoding_slices = []
+        encoding_actions = defaultdict(list)
+
+        # construct a sequence of histories for each step in the episode
+        for episode, episode_length in zip(episodes[:-1], episode_lengths, strict=True):
+            if episode_length:
+                encoding_slices.extend([encoding[episode : episode + length] for length in range(1, episode_length + 1)])
+                encoding_actions["continuous"].extend([
+                    actions.continuous_tensor[episode + length - 1] for length in range(1, episode_length + 1)
+                ])
+                encoding_actions["discrete"].extend([discrete_act[episode + length - 1] for length in range(1, episode_length + 1)])
+        encoding_actions = {
+            "continuous": torch.stack(encoding_actions["continuous"]),
+            "discrete": torch.stack(encoding_actions["discrete"]).squeeze(),
+        }
+        encoding = self.sequence_encoding_head(torchtune.data.left_pad_sequence(encoding_slices, batch_first=True)).mean(dim=1)
+        return encoding, encoding_actions
+
+    def _get_training_slices_and_actions(
+        self,
+        encoding: torch.Tensor,
+        actions: AgentAction,
+        first_steps: torch.Tensor,
+        loss_masks: torch.Tensor | None = None,
+        samples_per_episode: int = 10,
+    ) -> tuple[torch.Tensor, dict[str, torch.Tensor], torch.Tensor]:
+        discrete_act = torch.cat(
+            ModelUtils.actions_to_onehot(actions.discrete_tensor, self.network_body.action_spec.discrete_branches),
+            dim=1,
+        )
+        encoding = self.obs_act_encoder(
+            torch.cat([encoding[:-1], actions.to_flat(self.network_body.action_spec.discrete_branches)[:-1], encoding[1:]], dim=-1),
+        )
+        # append a True to capture the final step of the episode
+        episodes = torch.argwhere(torch.cat([first_steps, torch.ones(1, dtype=first_steps.dtype, device=first_steps.device)]))
+        episode_lengths = episodes[1:] - episodes[:-1]
+        training_slices = []
+        training_actions = defaultdict(list)
+        training_masks = []
+
+        # construct a sequence of random sub-histories for each step in the episode
+        for episode, episode_length in zip(episodes[:-1], episode_lengths, strict=True):
+            if episode_length:
+                slice_lengths = torch.randint(0, episode_length, (samples_per_episode,))
+                slice_starts = torch.randint(0, episode_length, (samples_per_episode,))
+                slice_ends = (slice_starts + slice_lengths).clamp(max=episode_length)
+                slice_lengths = slice_ends - slice_starts
+                slice_starts += episode
+                slice_ends += episode
+                slices = [
+                    (slice_start, slice_end)
+                    for slice_start, slice_end in zip(slice_starts, slice_ends, strict=True)
+                    if slice_end > slice_start
+                ]
+                training_slices.extend([encoding[slice_start:slice_end] for slice_start, slice_end in slices])
+                training_actions["continuous"].extend([actions.continuous_tensor[slice_end - 1] for _, slice_end in slices])
+                training_actions["discrete"].extend([discrete_act[slice_end - 1] for _, slice_end in slices])
+                training_masks.extend([loss_masks[slice_end - 1] for _, slice_end in slices])
+        encoding = self.sequence_encoding_head(torchtune.data.left_pad_sequence(training_slices, batch_first=True)).mean(dim=1)
+        training_actions = {
+            "continuous": torch.stack(training_actions["continuous"]),
+            "discrete": torch.stack(training_actions["discrete"]),
+        }
+        return encoding, training_actions, torch.stack(training_masks).view(-1)
+
+    def learning_loss(
+        self,
+        obs_only: list[list[torch.Tensor]],
+        actions: AgentAction,
+        loss_masks: torch.Tensor,
+        first_steps: torch.Tensor,
+        memories: Optional[torch.Tensor] = None,
+        sequence_length: int = 1,
+    ) -> torch.Tensor:
+        encoding, memories = self.network_body(
+            obs_only=obs_only,
+            obs=[],
+            actions=[],
+            memories=memories,
+            sequence_length=sequence_length,
+        )
+        loss = torch.zeros((1,))
+        encoding, training_actions, loss_masks = self._get_training_slices_and_actions(
+            encoding,
+            actions,
+            first_steps=first_steps,
+            loss_masks=loss_masks,
+        )
+
+        if self.continuous_club_head is not None:
+            loss = ModelUtils.masked_mean(self.continuous_club_head.learning_loss(encoding, training_actions["continuous"]), loss_masks)
+        if self.discrete_club_head is not None:
+            loss = ModelUtils.masked_mean(self.discrete_club_head.learning_loss(encoding, training_actions["discrete"]), loss_masks) + (
+                loss or 0
+            )
+        return loss
+
+    def baseline_loss(
+        self,
+        obs_without_actions: list[torch.Tensor],
+        obs_with_actions: tuple[list[list[torch.Tensor]], list[AgentAction]],
+        actions: AgentAction,
+        loss_masks: torch.Tensor,
+        first_steps: torch.Tensor,
+        memories: Optional[torch.Tensor] = None,
+        sequence_length: int = 1,
+    ) -> torch.Tensor:
+        (obs, act) = obs_with_actions
+        encoding, memories = self.network_body(
+            obs_only=[obs_without_actions],
+            obs=obs,
+            actions=act,
+            memories=memories,
+            sequence_length=sequence_length,
+        )
+        loss = torch.zeros((1,))
+        encoding, training_actions, loss_masks = self._get_training_slices_and_actions(
+            encoding,
+            actions,
+            first_steps=first_steps,
+            loss_masks=loss_masks,
+        )
+        if self.continuous_club_head is not None:
+            loss = ModelUtils.masked_mean(self.continuous_club_head.learning_loss(encoding, training_actions["continuous"]), loss_masks)
+        if self.discrete_club_head is not None:
+            loss = ModelUtils.masked_mean(self.discrete_club_head.learning_loss(encoding, training_actions["discrete"]), loss_masks) + (
+                loss or 0
+            )
+        return loss
+
+    def forward(
+        self,
+        encoding: torch.Tensor,
+        actions: dict[str, torch.Tensor],
+        memories: Optional[torch.Tensor] = None,
+        sequence_length: int = 1,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        # begin MIR3 predictions
+        club = torch.zeros(encoding.shape[0])
+        if self.continuous_club_head is not None:
+            club += self.continuous_club_head(encoding, actions["continuous"])
+        if self.discrete_club_head is not None:
+            club += self.discrete_club_head(encoding, actions["discrete"])
+
+        return club, memories
+
+    def club(
+        self,
+        obs: list[list[torch.Tensor]],
+        actions: AgentAction,
+        first_steps: torch.Tensor,
+        memories: Optional[torch.Tensor] = None,
+        sequence_length: int = 1,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """
+        The POCA baseline marginalizes the action of the agent associated with self_obs.
+        It calls the forward pass of the MultiAgentNetworkBody with the state action
+        pairs of groupmates but just the state of the agent in question.
+        :param obs_without_actions: The obs of the agent for which to compute the baseline.
+        :param obs_with_actions: Tuple of observations and actions for all groupmates.
+        :param memories: If using memory, a Tensor of initial memories.
+        :param sequence_length: If using memory, the sequence length.
+
+        :return: A Tuple of Dict of reward stream to tensor and critic memories.
+        """
+        encoding, sampled_actions = self._get_encoding(
+            obs_only=obs,
+            actions=actions,
+            first_steps=first_steps,
+            memories=memories,
+            sequence_length=sequence_length,
+        )
+        return self.forward(encoding, sampled_actions, memories=memories, sequence_length=sequence_length)
+
+    def club_baseline(
+        self,
+        obs_without_actions: list[torch.Tensor],
+        obs_with_actions: tuple[list[list[torch.Tensor]], list[AgentAction]],
+        actions: AgentAction,
+        first_steps: torch.Tensor,
+        memories: Optional[torch.Tensor] = None,
+        sequence_length: int = 1,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """
+        The POCA baseline marginalizes the action of the agent associated with self_obs.
+        It calls the forward pass of the MultiAgentNetworkBody with the state action
+        pairs of groupmates but just the state of the agent in question.
+        :param obs_without_actions: The obs of the agent for which to compute the baseline.
+        :param obs_with_actions: Tuple of observations and actions for all groupmates.
+        :param memories: If using memory, a Tensor of initial memories.
+        :param sequence_length: If using memory, the sequence length.
+
+        :return: A Tuple of Dict of reward stream to tensor and critic memories.
+        """
+        encoding, sampled_actions = self._get_baseline_encoding(
+            obs_without_actions=obs_without_actions,
+            obs_with_actions=obs_with_actions,
+            actions=actions,
+            first_steps=first_steps,
+            memories=memories,
+            sequence_length=sequence_length,
+        )
+
+        return self.forward(encoding, sampled_actions, memories=memories, sequence_length=sequence_length)

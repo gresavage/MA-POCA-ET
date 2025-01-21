@@ -161,6 +161,12 @@ class SACSettings(HyperparamSettings):
 POCASettings = PPOSettings
 
 
+@attr.s(auto_attribs=True)
+class MIR3POCASettings(POCASettings):
+    mi_beta: float = 5e-3  # mutual information regularization parameter
+    enable_mir: bool = True
+
+
 # INTRINSIC REWARD SIGNALS #############################################################
 class RewardSignalType(Enum):
     EXTRINSIC: str = "extrinsic"
@@ -598,12 +604,14 @@ class TrainerType(Enum):
     PPO: str = "ppo"
     SAC: str = "sac"
     POCA: str = "poca"
+    MIR3POCA: str = "mir3poca"
 
     def to_settings(self) -> type:
         mapping = {
             TrainerType.PPO: PPOSettings,
             TrainerType.SAC: SACSettings,
             TrainerType.POCA: POCASettings,
+            TrainerType.MIR3POCA: MIR3POCASettings,
         }
         return mapping[self]
 

@@ -36,6 +36,7 @@ def linear_layer(
     kernel_init: Initialization = Initialization.XavierGlorotUniform,
     kernel_gain: float = 1.0,
     bias_init: Initialization = Initialization.Zero,
+    bias: bool = True,
 ) -> torch.nn.Module:
     """
     Creates a torch.nn.Linear module and initializes its weights.
@@ -47,13 +48,14 @@ def linear_layer(
         KaimingHeNormal with kernel_gain of 0.1
     :param bias_init: The Initialization to use for the weights of the bias layer.
     """
-    layer = torch.nn.Linear(input_size, output_size)
+    layer = torch.nn.Linear(input_size, output_size, bias=bias)
     if kernel_init in {Initialization.KaimingHeNormal, Initialization.KaimingHeUniform}:
         _init_methods[kernel_init](layer.weight.data, nonlinearity="linear")
     else:
         _init_methods[kernel_init](layer.weight.data)
     layer.weight.data *= kernel_gain
-    _init_methods[bias_init](layer.bias.data)
+    if bias:
+        _init_methods[bias_init](layer.bias.data)
     return layer
 
 

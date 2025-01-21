@@ -3,4 +3,5 @@ from mapoca.torch_utils.torch import (
     nn as nn,  # noqa: PLC0414
     set_torch_config as set_torch_config,  # noqa: PLC0414
     torch as torch,  # noqa: PLC0414
+    torchtune as torchtune,  # noqa: PLC0414
 )

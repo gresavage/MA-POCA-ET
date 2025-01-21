@@ -2,7 +2,9 @@ import warnings
 
 from typing import Optional
 
-from mapoca.torch_utils import torch
+import torch.nn.attention.flex_attention
+
+from mapoca.torch_utils import torch, torchtune
 from mapoca.trainers.exception import UnityTrainerException
 from mapoca.trainers.torch.layers import Initialization, LayerNorm, LinearEncoder, linear_layer
 from mapoca.trainers.torch.model_serialization import exporting_to_onnx
@@ -240,32 +242,26 @@ class ResidualSelfAttention(torch.nn.Module):
         self.fc_q: torch.nn.Linear = linear_layer(
             embedding_size,
             embedding_size,
-            # kernel_init=Initialization.Normal,
-            # kernel_gain=(0.125 / embedding_size) ** 0.5,
             kernel_init=Initialization.XavierGlorotNormal,
+            kernel_gain=(0.125 / embedding_size) ** 0.5,
         )
         self.fc_k: torch.nn.Linear = linear_layer(
             embedding_size,
             embedding_size,
-            # kernel_init=Initialization.Normal,
-            # kernel_gain=(0.125 / embedding_size) ** 0.5,
             kernel_init=Initialization.XavierGlorotNormal,
+            kernel_gain=(0.125 / embedding_size) ** 0.5,
         )
         self.fc_v: torch.nn.Linear = linear_layer(
             embedding_size,
             embedding_size,
-            # kernel_init=Initialization.Normal,
-            # kernel_gain=(0.125 / embedding_size) ** 0.5,
             kernel_init=Initialization.XavierGlorotNormal,
-            kernel_gain=0.67,
+            kernel_gain=(0.125 / embedding_size) ** 0.5,
         )
         self.fc_out: torch.nn.Linear = linear_layer(
             embedding_size,
             embedding_size,
-            # kernel_init=Initialization.Normal,
-            # kernel_gain=(0.125 / embedding_size) ** 0.5,
             kernel_init=Initialization.XavierGlorotNormal,
-            kernel_gain=0.67,
+            kernel_gain=(0.125 / embedding_size) ** 0.5,
         )
         self.embedding_norm = LayerNorm()
         self.residual_norm = LayerNorm()
@@ -299,3 +295,115 @@ class ResidualSelfAttention(torch.nn.Module):
         numerator = torch.sum(output * (1 - mask).reshape(-1, num_ent, 1), dim=1)
         denominator = torch.sum(1 - mask, dim=1, keepdim=True) + self.EPSILON
         return numerator / denominator
+
+
+class PositionalSelfAttention(torch.nn.Module):
+    def __init__(
+        self,
+        embedding_size: int,
+        entity_num_max_elements: Optional[int] = None,
+        num_heads: int = 4,
+        multiple_of: int = 256,
+        ffn_dim_multiplier: int | None = None,
+    ):
+        super().__init__()
+        hidden_dim = int(2.0 * embedding_size / 3.0)
+        if ffn_dim_multiplier is not None:
+            hidden_dim = int(ffn_dim_multiplier * hidden_dim)
+        hidden_dim = multiple_of * ((hidden_dim + multiple_of - 1) // multiple_of)
+        fc_q: torch.nn.Linear = linear_layer(
+            embedding_size,
+            embedding_size,
+            kernel_init=Initialization.XavierGlorotNormal,
+            kernel_gain=(0.125 / embedding_size) ** 0.5,
+        )
+        fc_k: torch.nn.Linear = linear_layer(
+            embedding_size,
+            embedding_size,
+            kernel_init=Initialization.XavierGlorotNormal,
+            kernel_gain=(0.125 / embedding_size) ** 0.5,
+        )
+        fc_v: torch.nn.Linear = linear_layer(
+            embedding_size,
+            embedding_size,
+            kernel_init=Initialization.XavierGlorotNormal,
+            kernel_gain=(0.125 / embedding_size) ** 0.5,
+        )
+
+        # FF network from LLaMA-2 -> basically just a linear layer with SwiGLU activation
+        fc_out = torchtune.modules.FeedForward(
+            gate_proj=linear_layer(
+                embedding_size,
+                hidden_dim,
+                kernel_init=Initialization.XavierGlorotNormal,
+                kernel_gain=(0.125 / embedding_size) ** 0.5,
+                bias=False,
+            ),
+            down_proj=linear_layer(
+                hidden_dim,
+                embedding_size,
+                kernel_init=Initialization.XavierGlorotNormal,
+                kernel_gain=(0.125 / embedding_size) ** 0.5,
+                bias=False,
+            ),
+            up_proj=linear_layer(
+                embedding_size,
+                hidden_dim,
+                kernel_init=Initialization.XavierGlorotNormal,
+                kernel_gain=(0.125 / embedding_size) ** 0.5,
+                bias=False,
+            ),
+        )
+        pe = torchtune.modules.RotaryPositionalEmbeddings(embedding_size // num_heads)
+        attn = torchtune.modules.MultiHeadAttention(
+            embed_dim=embedding_size,
+            num_heads=num_heads,
+            num_kv_heads=num_heads,
+            head_dim=embedding_size // num_heads,
+            q_proj=fc_q,
+            k_proj=fc_k,
+            v_proj=fc_v,
+            output_proj=fc_out,
+            pos_embeddings=pe,
+        )
+
+        # FF network from LLaMA-2 -> basically just a linear layer with SwiGLU activation
+        ff = torchtune.modules.FeedForward(
+            gate_proj=linear_layer(
+                embedding_size,
+                hidden_dim,
+                kernel_init=Initialization.XavierGlorotNormal,
+                kernel_gain=(0.125 / embedding_size) ** 0.5,
+                bias=False,
+            ),
+            down_proj=linear_layer(
+                hidden_dim,
+                embedding_size,
+                kernel_init=Initialization.XavierGlorotNormal,
+                kernel_gain=(0.125 / embedding_size) ** 0.5,
+                bias=False,
+            ),
+            up_proj=linear_layer(
+                embedding_size,
+                hidden_dim,
+                kernel_init=Initialization.XavierGlorotNormal,
+                kernel_gain=(0.125 / embedding_size) ** 0.5,
+                bias=False,
+            ),
+        )
+        self.network_body = torchtune.modules.TransformerSelfAttentionLayer(
+            attn=attn,
+            mlp=ff,
+            sa_norm=torch.nn.RMSNorm(embedding_size),
+            mlp_norm=torch.nn.RMSNorm(embedding_size),
+        )
+
+    def forward(
+        self,
+        x: torch.Tensor,
+        *,
+        mask: Optional[torch.Tensor | torch.nn.attention.flex_attention.BlockMask] = None,
+        input_pos: Optional[torch.Tensor] = None,
+        **kwargs,
+    ) -> torch.Tensor:
+        return self.network_body(x, mask=mask, input_pos=input_pos, **kwargs)

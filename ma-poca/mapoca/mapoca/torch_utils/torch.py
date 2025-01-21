@@ -56,6 +56,8 @@ set_torch_config(TorchSettings(device=None))
 
 nn = torch.nn
 
+import torchtune as torchtune  # noqa: E402, PLC0414
+
 
 def default_device():
     return _device

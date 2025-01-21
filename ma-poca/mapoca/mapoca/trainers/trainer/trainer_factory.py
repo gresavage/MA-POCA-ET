@@ -6,7 +6,7 @@ from mapoca.trainers.environment_parameter_manager import EnvironmentParameterMa
 from mapoca.trainers.exception import TrainerConfigError
 from mapoca.trainers.ghost.controller import GhostController
 from mapoca.trainers.ghost.trainer import GhostTrainer
-from mapoca.trainers.poca.trainer import POCATrainer
+from mapoca.trainers.poca.trainer import MIR3POCATrainer, POCATrainer
 from mapoca.trainers.ppo.trainer import PPOTrainer
 from mapoca.trainers.sac.trainer import SACTrainer
 from mapoca.trainers.settings import TrainerSettings, TrainerType
@@ -119,6 +119,16 @@ class TrainerFactory:
             )
         elif trainer_type == TrainerType.POCA:
             trainer = POCATrainer(
+                brain_name,
+                min_lesson_length,
+                trainer_settings,
+                train_model,
+                load_model,
+                seed,
+                trainer_artifact_path,
+            )
+        elif trainer_type == TrainerType.MIR3POCA:
+            trainer = MIR3POCATrainer(
                 brain_name,
                 min_lesson_length,
                 trainer_settings,

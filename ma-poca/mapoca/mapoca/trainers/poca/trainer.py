@@ -13,10 +13,10 @@ from mlagents_envs.side_channel.stats_side_channel import StatsAggregationMethod
 
 from mapoca.trainers.behavior_id_utils import BehaviorIdentifiers
 from mapoca.trainers.buffer import BufferKey, RewardSignalUtil
-from mapoca.trainers.poca.optimizer_torch import TorchETPOCAOptimizer, TorchPOCAOptimizer
+from mapoca.trainers.poca.optimizer_torch import TorchETPOCAOptimizer, TorchMIR3POCAOptimizer, TorchPOCAOptimizer
 from mapoca.trainers.policy import Policy
 from mapoca.trainers.policy.torch_policy import TorchPolicy
-from mapoca.trainers.settings import POCASettings, TrainerSettings
+from mapoca.trainers.settings import MIR3POCASettings, POCASettings, TrainerSettings
 from mapoca.trainers.trainer.rl_trainer import RLTrainer
 from mapoca.trainers.trajectory import Trajectory
 
@@ -358,6 +358,73 @@ class ETPOCATrainer(POCATrainer):
 
     def create_poca_optimizer(self) -> TorchPOCAOptimizer:
         return TorchETPOCAOptimizer(self.policy, self.trainer_settings)
+
+
+class MIR3POCATrainer(POCATrainer):
+    optimizer: TorchMIR3POCAOptimizer
+    hyperparameters: MIR3POCASettings
+
+    def create_poca_optimizer(self) -> TorchMIR3POCAOptimizer:
+        return TorchMIR3POCAOptimizer(self.policy, self.trainer_settings)
+
+    def _update_policy(self):
+        """
+        Uses demonstration_buffer to update the policy.
+        The reward signal generators must be updated in this method at their own pace.
+        """
+        buffer_length = self.update_buffer.num_experiences
+        self.cumulative_returns_since_policy_update.clear()
+
+        # Make sure batch_size is a multiple of sequence length. During training, we
+        # will need to reshape the data into a batch_size x sequence_length tensor.
+        batch_size = self.hyperparameters.batch_size - self.hyperparameters.batch_size % self.policy.sequence_length
+        # Make sure there is at least one sequence
+        batch_size = max(batch_size, self.policy.sequence_length)
+
+        n_sequences = max(
+            int(self.hyperparameters.batch_size / self.policy.sequence_length),
+            1,
+        )
+
+        if self.hyperparameters.enable_mir:
+            update_stats = self.optimizer.update_club(self.update_buffer, n_sequences)
+            for stat, val in update_stats.items():
+                self._stats_reporter.add_stat(stat, val)
+            club_mean, baseline_club_mean = self.optimizer.update_buffer_club_values(self.update_buffer)
+            self.stats_reporter.add_stat("Environment/CLUB Estimate", club_mean.item())
+            self.stats_reporter.add_stat("Environment/CLUB Baseline Estimate", baseline_club_mean.item())
+        else:
+            self.stats_reporter.add_stat("Environment/CLUB Estimate", 0.0)
+            self.stats_reporter.add_stat("Environment/CLUB Baseline Estimate", 0.0)
+
+        advantages = np.array(
+            self.update_buffer[BufferKey.ADVANTAGES].get_batch(),
+            dtype=np.float32,
+        )
+        self.update_buffer[BufferKey.ADVANTAGES].set(
+            (advantages - advantages.mean()) / (advantages.std() + 1e-10),
+        )
+        num_epoch = self.hyperparameters.num_epoch
+        batch_update_stats = defaultdict(list)
+        for _ in range(num_epoch):
+            self.update_buffer.shuffle(sequence_length=self.policy.sequence_length)
+            buffer = self.update_buffer
+            max_num_batch = buffer_length // batch_size
+            for i in range(0, max_num_batch * batch_size, batch_size):
+                mini_batch = buffer.make_mini_batch(i, i + batch_size)
+                update_stats = self.optimizer.update(mini_batch, n_sequences)
+                for stat_name, value in update_stats.items():
+                    batch_update_stats[stat_name].append(value)
+
+        for stat, stat_list in batch_update_stats.items():
+            self._stats_reporter.add_stat(stat, np.mean(stat_list))
+
+        if self.optimizer.bc_module:
+            update_stats = self.optimizer.bc_module.update()
+            for stat, val in update_stats.items():
+                self._stats_reporter.add_stat(stat, val)
+        self._clear_update_buffer()
+        return True
 
 
 def lambda_return(r, value_estimates, gamma=0.99, lambd=0.8, value_next=0.0):
