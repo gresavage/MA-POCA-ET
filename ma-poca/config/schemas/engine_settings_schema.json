@@ -1,0 +1,44 @@
+{
+  "$schema": "https://json-schema.org/draft-07/hyper-schema",
+  "$id": "engine_settings_schema.json",
+  "$ref": "./python_numbers_schema.json",
+  "title": "Engine Settings",
+  "description": "Settings for the Unity engine",
+  "properties": {
+    "width": {
+      "description": "The width of the executable window of the environment(s) in pixels (ignored for editor training).",
+      "default": 84,
+      "$ref": "#/definitions/pythonInt"
+    },
+    "height": {
+      "description": "The height of the executable window of the environment(s) in pixels (ignored for editor training).",
+      "default": 84,
+      "$ref": "#/definitions/pythonInt"
+    },
+    "quality_level": {
+      "description": "The quality level of the environment(s). Equivalent to calling QualitySettings.SetQualityLevel in Unity.",
+      "default": 5,
+      "$ref": "#/definitions/pythonInt"
+    },
+    "time_scale": {
+      "description": "The time scale of the Unity environment(s). Equivalent to setting Time.timeScale in Unity.",
+      "default": 20.0,
+      "$ref": "#/definitions/pythonFloat"
+    },
+    "target_frame_rate": {
+      "description": "The target frame rate of the Unity environment(s). Equivalent to setting Application.targetFrameRate in Unity.",
+      "default": -1,
+      "$ref": "#/definitions/pythonInt"
+    },
+    "capture_frame_rate": {
+      "description": "The capture frame rate of the Unity environment(s). Equivalent to setting Time.captureFramerate in Unity.",
+      "default": 60,
+      "$ref": "#/definitions/pythonInt"
+    },
+    "no_graphics": {
+      "description": "Whether to run the Unity executable in no-graphics mode (i.e. without initializing the graphics driver. Use this only if your agents don't use visual observations.",
+      "type": "boolean",
+      "default": false
+    }
+  }
+}

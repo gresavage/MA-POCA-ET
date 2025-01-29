@@ -1,0 +1,42 @@
+{
+  "$schema": "https://json-schema.org/draft-07/hyper-schema",
+  "$id": "ma_poca_schema.json",
+  "$ref": "./python_numbers_schema.json",
+  "title": "Run Options",
+  "description": "Settings for running the algorithms",
+  "properties": {
+    "default_settings": {
+      "description": "Default trainer settings to use with all behaviors.",
+      "$ref": "./trainer_settings_schema.json"
+    },
+    "behaviors": {
+      "type": "object",
+      "description": "Identifiers for a behavior in Unity.",
+      "patternProperties": {
+        "^\\w*": {
+          "$ref": "./trainer_settings_schema.json"
+        }
+      }
+    },
+    "env_settings": {
+      "$ref": "./environment_settings_schema.json"
+    },
+    "engine_settings": {
+      "$ref": "./engine_settings_schema.json"
+    },
+    "environment_parameters": {
+      "$ref": "./environment_parameters_schema.json"
+    },
+    "checkpoint_settings": {
+      "$ref": "./checkpoint_settings_schema.json"
+    },
+    "torch_settings": {
+      "$ref": "./torch_settings_schema.json"
+    },
+    "debug": {
+      "description": "Whether to enable debug-level logging for some parts of the code",
+      "type": "boolean",
+      "default": false
+    }
+  }
+}

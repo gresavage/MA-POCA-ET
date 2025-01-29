@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json-schema.org/draft-07/hyper-schema",
+  "$id": "torch_settings_schema.json",
+  "$ref": "./python_numbers_schema.json",
+  "title": "PyTorch Settings",
+  "description": "Settings for configuring the PyTorch.",
+  "properties": {
+    "device": {
+      "description": "Settings for the default torch.device used in training, for example, 'cpu', 'cuda', or 'cuda:0'",
+      "oneOf": [{ "type": "null" }, { "type": "string" }],
+      "default": null
+    }
+  }
+}

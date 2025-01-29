@@ -1,9 +1,10 @@
+# yaml-language-server: $schema=../schemas/ma_poca_schema.json
 behaviors:
   PushBlockCollab:
-    trainer_type: poca
+    trainer_type: mir3poca
     hyperparameters:
-      batch_size: 1024
-      buffer_size: 10240
+      batch_size: 1_024
+      buffer_size: 10_240
       learning_rate: 0.0003
       beta: 0.01
       mi_beta: 0.01  # mutual information regularization parameter
@@ -21,9 +22,9 @@ behaviors:
         gamma: 0.99
         strength: 1.0
     keep_checkpoints: 5
-    max_steps: 15000000
-    time_horizon: 10000000
-    summary_freq: 60000
+    max_steps: 15_000_000
+    time_horizon: 10_000_000
+    summary_freq: 60_000
 env_settings:
   num_envs: 1
   seed: 5

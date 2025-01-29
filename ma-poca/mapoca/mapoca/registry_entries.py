@@ -3,46 +3,11 @@ from typing import Any, Optional
 from mlagents_envs.base_env import BaseEnv
 from mlagents_envs.registry import UnityEnvRegistry
 from mlagents_envs.registry.base_registry_entry import BaseRegistryEntry
-from mlagents_envs.registry.remote_registry_entry import RemoteRegistryEntry
 
 from mapoca.particles_env import ParticlesEnvironment
 
 mapoca_registry = UnityEnvRegistry()
-
-mapoca_registry.register(
-    RemoteRegistryEntry(
-        "BatonPass",
-        15,
-        "The baton pass environment",
-        "https://storage.googleapis.com/mlagents-test-environments/ma-poca/linux/Startup.zip",
-        "https://storage.googleapis.com/mlagents-test-environments/ma-poca/darwin/Startup.zip",
-        "https://storage.googleapis.com/mlagents-test-environments/ma-poca/win/Startup.zip",
-        ["--mlagents-scene-name", "Assets/ML-Agents/Examples/BatonPass/Scenes/BatonPass.unity"],
-    ),
-)
-mapoca_registry.register(
-    RemoteRegistryEntry(
-        "DungeonEscape",
-        1,
-        "Thedungeon escape environment (hard version)",
-        "https://storage.googleapis.com/mlagents-test-environments/ma-poca/linux/Startup.zip",
-        "https://storage.googleapis.com/mlagents-test-environments/ma-poca/darwin/Startup.zip",
-        "https://storage.googleapis.com/mlagents-test-environments/ma-poca/win/Startup.zip",
-        ["--mlagents-scene-name", "Assets/ML-Agents/Examples/DungeonEscape/Scenes/DungeonEscapeHard.unity"],
-    ),
-)
-
-mapoca_registry.register(
-    RemoteRegistryEntry(
-        "PushBlockColab",
-        9,
-        "The push block colab environment",
-        "https://storage.googleapis.com/mlagents-test-environments/ma-poca/linux/Startup.zip",
-        "https://storage.googleapis.com/mlagents-test-environments/ma-poca/darwin/Startup.zip",
-        "https://storage.googleapis.com/mlagents-test-environments/ma-poca/win/Startup.zip",
-        ["--mlagents-scene-name", "Assets/ML-Agents/Examples/PushBlock/Scenes/PushBlockCollab.unity"],
-    ),
-)
+mapoca_registry.register_from_yaml("https://storage.googleapis.com/mlagents-test-environments/1.1.0/manifest.yaml")
 
 
 class ParticleEnvEntry(BaseRegistryEntry):

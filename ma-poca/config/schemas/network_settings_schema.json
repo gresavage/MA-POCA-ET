@@ -1,0 +1,60 @@
+{
+  "$schema": "https://json-schema.org/draft-07/hyper-schema",
+  "$id": "network_settings_schema.json",
+  "$ref": "./python_numbers_schema.json",
+  "title": "Network Settings",
+  "description": "Settings for the behavior network.",
+  "additionalProperties": true,
+  "properties": {
+    "normalize": {
+      "type": "boolean",
+      "description": "Whether to normalize the network inputs.",
+      "default": false
+    },
+    "hidden_units": {
+      "description": "The number of units in the hidden network layers. This may be handled differently depending on the network or trainer type",
+      "default": 128,
+      "$ref": "#/definitions/pythonInt"
+    },
+    "num_layers": {
+      "description": "The number of layers in the network.",
+      "default": 2,
+      "$ref": "#/definitions/pythonInt"
+    },
+    "vis_encoder_type": {
+      "type": "string",
+      "description": "The type of visual observation encoder.",
+      "default": "simple",
+      "enum": ["fully_connected", "match3", "simple", "nature_cnn", "resnet"]
+    },
+    "memory": {
+      "default": null,
+      "oneOf": [
+        {
+          "type": "null"
+        },
+        {
+          "type": "object",
+          "properties": {
+            "sequence_length": {
+              "description": "The memory sequence length.",
+              "default": 64,
+              "$ref": "#/definitions/pythonInt"
+            },
+            "memory_size": {
+              "description": "The number of hidden units in the memory module.",
+              "default": 128,
+              "$ref": "#/definitions/pythonInt"
+            }
+          }
+        }
+      ]
+    },
+    "goal_conditioning_type": {
+      "type": "string",
+      "description": "The type of goal conditioning to use",
+      "default": "hyper",
+      "enum": ["hyper", "none"]
+    }
+  }
+}

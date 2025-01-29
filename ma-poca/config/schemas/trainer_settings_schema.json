@@ -1,0 +1,188 @@
+{
+  "$schema": "https://json-schema.org/draft-07/hyper-schema",
+  "$id": "trainer_settings_schema.json",
+  "$ref": "./python_numbers_schema.json",
+  "title": "Trainer Settings",
+  "description": "The specifications for this trainer.",
+  "properties": {
+    "trainer_type": {
+      "type": "string",
+      "description": "The name of the trainer to use from the registry (case insensitive)"
+    },
+    "hyperparameters": {
+      "type": "object",
+      "title": "Hyperparameters",
+      "description": "Hyperparameters for the trainer.",
+      "additionalProperties": true,
+      "properties": {
+        "batch_size": {
+          "$ref": "#/definitions/pythonInt",
+          "description": "Batch size for learning. This may be further broken into minibatches by the trainer.",
+          "default": 1024
+        },
+        "buffer_size": {
+          "description": "Buffer size for collecting rollouts. For off-policy algorithms this is the size of the replay buffer, for on-policy algorithms this is the number of experiences collected between epochs.",
+          "default": 10240,
+          "$ref": "#/definitions/pythonInt"
+        },
+        "learning_rate": {
+          "description": "The learning rate (step size) for the optimizer.",
+          "default": 0.0003,
+          "$ref": "#/definitions/pythonFloat"
+        },
+        "learning_rate_schedule": {
+          "type": "string",
+          "description": "The schedule type for updating the learning rate.",
+          "enum": ["constant", "linear"],
+          "default": "constant"
+        }
+      }
+    },
+    "network_settings": {
+      "$ref": "./network_settings_schema.json"
+    },
+    "reward_signals": {
+      "title": "Reward Signals",
+      "description": "Specification for the reward signals to use with training.",
+      "type": "object",
+      "additionalProperties": false,
+      "patternProperties": {
+        "extrinsic|gail|curiosity|rnd": {
+          "description": "The type of reward signal.",
+          "additionalProperties": false,
+          "properties": {
+            "gamma": {
+              "description": "The time-decay parameter.",
+              "default": 0.99,
+              "$ref": "#/definitions/pythonFloat"
+            },
+            "strength": {
+              "description": "A multiplier used to control the strength of the reward signal when adding to other signals.",
+              "default": 1.0,
+              "$ref": "#/definitions/pythonFloat"
+            },
+            "network_settings": {
+              "type": "object",
+              "description": "Settings for the network when a network-based reward provider is chosen (e.g. curiosity)",
+              "$ref": "./network_settings_schema.json"
+            }
+          }
+        }
+      }
+    },
+    "init_path": {
+      "description": "The path from which to load the model.",
+      "oneOf": [{ "type": "null" }, { "type": "string" }]
+    },
+    "keep_checkpoints": {
+      "description": "The number of checkpoints to retain.",
+      "default": 5,
+      "$ref": "#/definitions/pythonInt"
+    },
+    "checkpoint_interval": {
+      "description": "The frequency in steps with which to checkpoint the models,",
+      "default": 500000,
+      "$ref": "#/definitions/pythonInt"
+    },
+    "max_steps": {
+      "description": "The maximum number of steps for which to train.",
+      "default": 500000,
+      "$ref": "#/definitions/pythonInt"
+    },
+    "time_horizon": {
+      "description": "The maximum episode length before truncation.",
+      "default": 64,
+      "$ref": "#/definitions/pythonInt"
+    },
+    "summary_freq": {
+      "description": "The number of steps between summarizing statistics.",
+      "default": 50000,
+      "$ref": "#/definitions/pythonInt"
+    },
+    "threaded": {
+      "description": "Whether or not to run trainers in a separate thread. Disable for testing/debugging.",
+      "type": "boolean",
+      "default": false
+    },
+    "self_play": {
+      "title": "Self Play",
+      "description": "The settings for self-play.",
+      "oneOf": [
+        { "type": "null" },
+        {
+          "type": "object",
+          "properties": {
+            "save_steps": {
+              "description": "The frequency with which to save models as self-play entities",
+              "default": 20000,
+              "$ref": "#/definitions/pythonInt"
+            },
+            "swap_steps": {
+              "description": "The frequency with which to swap between training and self-play",
+              "default": 2000,
+              "$ref": "#/definitions/pythonInt"
+            },
+            "team_change": {
+              "description": "The frequency with which to change teams, defaults to 5x 'save_steps'",
+              "$ref": "#/definitions/pythonInt"
+            },
+            "window": {
+              "description": "The number of snapshots to keep.",
+              "default": 10,
+              "$ref": "#/definitions/pythonInt"
+            },
+            "play_against_latest_model_ratio": {
+              "description": "The ratio of matches played against the latest policy vs. a snapshot.",
+              "default": 0.5,
+              "$ref": "#/definitions/pythonFloat"
+            },
+            "initial_elo": {
+              "description": "The initial ELO rating to use for a new snapshot",
+              "default": 1200.0,
+              "$ref": "#/definitions/pythonFloat"
+            }
+          }
+        }
+      ]
+    },
+    "behavioral_cloning": {
+      "title": "Behavior Cloning",
+      "description": "Settings for behavior cloning",
+      "oneOf": [
+        { "type": "null" },
+        {
+          "required": ["demo_path"],
+          "demo_path": {
+            "description": "The path to a saved buffer to use as experiences for behavior cloning.",
+            "type": "string"
+          },
+          "steps": {
+            "description": "The number of steps to anneal the learning rate of behavior cloning.",
+            "default": 0,
+            "$ref": "#/definitions/pythonInt"
+          },
+          "strength": {
+            "description": "The strength of the behavior cloning.",
+            "default": 1.0,
+            "$ref": "#/definitions/pythonFloat"
+          },
+          "samples_per_update": {
+            "description": "The maximum number of samples per BC update. If 0 then all the samples in the buffer will be used.",
+            "default": 0,
+            "$ref": "#/definitions/pythonInt"
+          },
+          "num_epoch": {
+            "description": "The number of epochs to train on the batch of samples each BC step. If 'null' the settings from the trainer will be used.",
+            "default": null,
+            "oneOf": [{ "type": "null" }, { "$ref": "#/definitions/pythonInt" }]
+          },
+          "batch_size": {
+            "description": "The size of the batch to train on for each BC step. If 'null' the settings from the trainer will be used.",
+            "default": null,
+            "oneOf": [{ "type": "null" }, { "$ref": "#/definitions/pythonInt" }]
+          }
+        }
+      ]
+    }
+  }
+}

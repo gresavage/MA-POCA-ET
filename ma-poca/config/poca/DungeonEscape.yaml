@@ -1,3 +1,4 @@
+# yaml-language-server: $schema=../schemas/ma_poca_schema.json
 behaviors:
   DungeonEscape:
     trainer_type: poca
@@ -18,7 +19,7 @@ behaviors:
     reward_signals:
       extrinsic:
         gamma: 0.99
-        strength: 1.0
+        strength: -1.0
     keep_checkpoints: 5
     max_steps: 20000000
     time_horizon: 10000000

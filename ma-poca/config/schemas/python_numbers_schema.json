@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft-07/hyper-schema",
+  "$id": "python_numbers_schema.json",
+  "$comment": "These are definitions order to get the language server to accept PEP-515 conventions as valid",
+  "definitions": {
+    "pythonInt": {
+      "oneOf": [
+        { "type": "integer" },
+        { "type": "string", "pattern": "^-?[0-9]+(?:_[0-9]+)+$" }
+      ]
+    },
+    "pythonFloat": {
+      "oneOf": [
+        { "type": "number" },
+        {
+          "type": "string",
+          "pattern": "^-?([0-9](?:_[0-9]+)*)*(\\.([0-9]+)(?:_[0-9]+)*)?$"
+        }
+      ]
+    }
+  }
+}

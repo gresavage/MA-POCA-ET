@@ -1,9 +1,10 @@
+# yaml-language-server: $schema=../schemas/ma_poca_schema.json
 behaviors:
   simple_spread:
     trainer_type: mir3poca
     hyperparameters:
-      batch_size: 512
-      buffer_size: 5120
+      batch_size: 5_120
+      buffer_size: 5_120
       learning_rate: 0.0003
       beta: 0.01
       mi_beta: 0.1  # mutual information regularization parameter
@@ -24,9 +25,9 @@ behaviors:
         gamma: 0.99
         strength: 1.0
     keep_checkpoints: 5
-    max_steps: 60000000
+    max_steps: 60_000_000
     time_horizon: 64
-    summary_freq: 10000
+    summary_freq: 10_000
 env_settings:
   seed: 5
 

@@ -1,0 +1,105 @@
+{
+  "$schema": "https://json-schema.org/draft-07/hyper-schema",
+  "$id": "environment_parameters_schema.json",
+  "$ref": "./python_numbers_schema.json",
+  "title": "Environment Parameters",
+  "description": "Settings for parameters in the environment. A list of lessons for one environment parameter.",
+  "type": "object",
+  "patternProperties": {
+    "\\w*": {
+      "description": "The value for this environment parameter.",
+      "oneOf": [
+        { "$ref": "#/definitions/pythonFloat" },
+        {
+          "type": "object",
+          "properties": {
+            "sampler_type": {
+              "description": "The type of sampler to use for this parameter",
+              "type": "string",
+              "enum": ["uniform", "gaussian", "multirangeuniform", "constant"]
+            },
+            "sampler_parameters": {
+              "description": "The parameters for this sampler.",
+              "type": "object"
+            },
+            "curriculum": {
+              "description": "The sequence of individual lessons in the curriculum",
+              "type": "array",
+              "items": {
+                "description": "The data of one lesson for one environment parameter including its name, the condition that must be fullfiled for the lesson to be completed and a sampler for the environment parameter. If the completion_criteria is None, then this is the last lesson in the curriculum.",
+                "type": "object",
+                "properties": {
+                  "value": {
+                    "description": "The type of parameter randomization for the lesson",
+                    "type": "object",
+                    "properties": {
+                      "sampler_type": {
+                        "description": "The type of sampler to use for this parameter",
+                        "type": "string",
+                        "enum": [
+                          "uniform",
+                          "gaussian",
+                          "multirangeuniform",
+                          "constant"
+                        ]
+                      },
+                      "sampler_parameters": {
+                        "description": "The parameters for this sampler.",
+                        "type": "object"
+                      }
+                    }
+                  },
+                  "name": {
+                    "description": "The name for this lesson",
+                    "type": "string"
+                  },
+                  "completion_criteria": {
+                    "description": "The criteria for considering this lesson complete.",
+                    "oneOf": [
+                      { "type": "null" },
+                      {
+                        "type": "object",
+                        "description": "The information needed to figure out if the next lesson must start.",
+                        "required": ["behavior"],
+                        "properties": {
+                          "behavior": {
+                            "type": "string"
+                          },
+                          "measure": {
+                            "type": "string",
+                            "enum": ["progress", "reward"],
+                            "default": "reward"
+                          },
+                          "min_lesson_length": {
+                            "description": "The minimum length a lesson must be.",
+                            "default": 0,
+                            "$ref": "#/definitions/pythonInt"
+                          },
+                          "signal_smoothing": {
+                            "description": "Whether to use signal smoothing on the measure.",
+                            "type": "boolean",
+                            "default": true
+                          },
+                          "threshold": {
+                            "description": "The minimum threshold the measure must reach to consider the lesson complete.",
+                            "default": 0.0,
+                            "$ref": "#/definitions/pythonFloat"
+                          },
+                          "require_reset": {
+                            "description": "Whether to reset the environment when the lesson is complete.",
+                            "type": "boolean",
+                            "default": false
+                          }
+                        }
+                      }
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        }
+      ]
+    }
+  }
+}

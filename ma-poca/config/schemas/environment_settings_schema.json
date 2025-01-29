@@ -1,0 +1,35 @@
+{
+  "$schema": "https://json-schema.org/draft-07/hyper-schema",
+  "$id": "environment_settings_schema.json",
+  "$ref": "./python_numbers_schema.json",
+  "title": "Environment Settings",
+  "description": "Settings for the running/training environment.",
+  "properties": {
+    "env_name": {
+      "description": "The name of the environment in the registry. Must be provided here or via the command line using '--env'",
+      "oneOf": [{ "type": "null" }, { "type": "string" }]
+    },
+    "env_args": {
+      "description": "Positional arguments to pass to the environment constructor.",
+      "oneOf": [
+        { "type": "null" },
+        { "type": "array", "items": { "type": "string" } }
+      ]
+    },
+    "base_port": {
+      "description": "The base port to use when creating workers. The port for each worker will be 'base_port + worker_id'",
+      "default": 5005,
+      "$ref": "#/definitions/pythonInt"
+    },
+    "num_envs": {
+      "description": "The number of simultaneous environments to use for rollouts.",
+      "default": 1,
+      "$ref": "#/definitions/pythonInt"
+    },
+    "seed": {
+      "description": "The seed to use for random number generation.",
+      "default": -1,
+      "$ref": "#/definitions/pythonInt"
+    }
+  }
+}
